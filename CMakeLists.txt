@@ -1,30 +1,39 @@
 # SPDX-License-Identifier: BSD-2-Clause
-# SPDX-FileCopyrightText: Alberto Villa <avilla@FreeBSD.org>, Laurent Montel <montel@kde.org>, Jean-Baptiste Mardelle <jb@kdenlive.org>
+# SPDX-FileCopyrightText: Vincent PINON <vincent.pinon@laposte.net>, Jean-Baptiste Mardelle <jb@kdenlive.org>, Julius Künzel <julius.kuenzel@kde.org>
 
-set(sampleplugin_SRCS sampleplugin.cpp)
+add_subdirectory(effects)
+add_subdirectory(generators)
+add_subdirectory(layouts)
+add_subdirectory(transitions)
+add_subdirectory(icons)
+add_subdirectory(knewstuff)
+add_subdirectory(lumas)
+add_subdirectory(scripts)
+add_subdirectory(man)
+add_subdirectory(titles)
+add_subdirectory(profiles)
+add_subdirectory(resourceproviders)
+add_subdirectory(shortcuts)
+add_subdirectory(luts)
 
-ki18n_wrap_ui(sampleplugin_UIS countdown_ui.ui)
+install(FILES
+  meta_magiclantern.png
+  encodingprofiles.rc
+  externalproxies.rc
+  kdenliveeffectscategory.rc
+  kdenlivetranscodingrc
+  slideanimations.rc
+  clipjobsettings.rc
 
-add_library(kdenlive_sampleplugin MODULE WITH_PREFIX
-  ${sampleplugin_SRCS}
-  ${sampleplugin_UIS}
-)
+  DESTINATION ${KDE_INSTALL_DATADIR}${DATA_INSTALL_PREFIX})
 
-add_definitions(${KDE4_DEFINITIONS})
+install(FILES kdenlive.notifyrc DESTINATION ${KDE_INSTALL_KNOTIFYRCDIR})
 
+install(FILES profiles.xml DESTINATION ${KDE_INSTALL_DATADIR}${DATA_INSTALL_PREFIX}/export)
+install(FILES org.kde.kdenlive.appdata.xml DESTINATION ${KDE_INSTALL_METAINFODIR})
+install(FILES org.kde.kdenlive.desktop DESTINATION ${KDE_INSTALL_APPDIR})
 
-include(${QT_USE_FILE})
+find_package(SharedMimeInfo REQUIRED)
+install(FILES org.kde.kdenlive.xml westley.xml DESTINATION ${KDE_INSTALL_MIMEDIR})
+update_xdg_mimetypes(${KDE_INSTALL_MIMEDIR})
 
-#add_definitions(${QT_DEFINITIONS})
-#add_definitions(-DQT_NO_DEBUG)
-add_definitions(-DQT_PLUGIN)
-add_definitions(-DQT_SHARED)
-
-target_link_libraries(kdenlive_sampleplugin
-  KF5::KDELibs4Support
-  
-  KF5::KIOCore
-  ${QT_LIBRARIES}
-)
-
-install(TARGETS kdenlive_sampleplugin DESTINATION ${KDE_INSTALL_PLUGINDIR})
