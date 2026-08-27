@@ -1,14 +1,5 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # SPDX-FileCopyrightText: Julius Künzel <julius.kuenzel@kde.org>
 
-INSTALL (FILES 
+install(FILES kdenlive_renderprofiles.knsrc kdenlive_wipes.knsrc kdenlive_keyboardschemes.knsrc kdenlive_titles.knsrc kdenlive_luts.knsrc kdenlive_effects.knsrc DESTINATION ${KDE_INSTALL_KNSRCDIR})
 
-sox_band.xml
-sox_bass.xml
-sox_echo.xml
-sox_flanger.xml
-sox_gain.xml
-sox_phaser.xml
-sox_stretch.xml
-
-DESTINATION ${KDE_INSTALL_DATADIR}${DATA_INSTALL_PREFIX}/effects)

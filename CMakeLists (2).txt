@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: BSD-2-Clause
-# SPDX-FileCopyrightText: Julius Künzel <julius.kuenzel@kde.org>
+# SPDX-FileCopyrightText: Jean-Baptiste Mardelle <jb@kdenlive.org>
 
-INSTALL (FILES 
+INSTALL (FILES
+    audio.json
+    color.json
+    editing.json
+    editing_vertical.json
+    effects.json
+    logging.json
+DESTINATION ${KDE_INSTALL_DATADIR}${DATA_INSTALL_PREFIX}/layouts)
 
-secondary_color_correction.xml
-secondary_color_correction_v2.xml
-shut_off.xml
-
-DESTINATION ${KDE_INSTALL_DATADIR}${DATA_INSTALL_PREFIX}/effect-templates)

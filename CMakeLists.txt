@@ -1,20 +1,28 @@
 # SPDX-License-Identifier: BSD-2-Clause
-# SPDX-FileCopyrightText: Julius Künzel <julius.kuenzel@kde.org>
+# SPDX-FileCopyrightText: Vincent Pinon <vpinon@kde.org>, Julius Künzel <julius.kuenzel@kde.org>, Jean-Baptiste Mardelle <jb@kdenlive.org>
 
-INSTALL (FILES 
-
-movit_blur.xml
-movit_deconvolution_sharpen.xml
-movit_diffusion.xml
-movit_flip.xml
-movit_glow.xml
-movit_lift_gamma_gain.xml
-movit_mirror.xml
-movit_opacity.xml
-movit_rect.xml
-movit_saturation.xml
-movit_unsharp_mask.xml
-movit_vignette.xml
-movit_white_balance.xml
-
-DESTINATION ${KDE_INSTALL_DATADIR}${DATA_INSTALL_PREFIX}/effects)
+ecm_install_icons(ICONS
+  16-apps-syncut.png
+  22-apps-syncut.png
+  32-apps-syncut.png
+  48-apps-syncut.png
+  64-apps-syncut.png
+  128-apps-syncut.png
+  256-apps-syncut.png
+  512-apps-syncut.png
+  sc-apps-kdenlive.svg
+  16-apps-kdenlive.png
+  22-apps-kdenlive.png
+  32-apps-kdenlive.png
+  48-apps-kdenlive.png
+  64-apps-kdenlive.png
+  128-apps-kdenlive.png
+  256-apps-kdenlive.png
+  512-apps-kdenlive.png
+  32-mimetypes-application-x-kdenlivetitle.png
+  64-mimetypes-application-x-kdenlivetitle.png
+  128-mimetypes-application-x-kdenlivetitle.png
+  sc-mimetypes-application-x-kdenlivetitle.svgz
+  sc-mimetypes-application-x-kdenlive.svgz
+  sc-mimetypes-video-mlt-playlist.svgz
+  DESTINATION ${KDE_INSTALL_ICONDIR})
