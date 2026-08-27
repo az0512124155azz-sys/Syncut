@@ -1,0 +1,63 @@
+name: Windows native alpha
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'website/**'
+      - '**/*.md'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup MSYS2 UCRT64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            make
+            cmake
+            ninja
+            zip
+            base-devel
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-extra-cmake-modules
+            mingw-w64-ucrt-x86_64-kdenlive
+      - name: Build Syncut
+        shell: msys2 {0}
+        run: |
+          set -e
+          BUILD="$PWD/build-windows"
+          INSTALL="$PWD/dist/Syncut-Alpha"
+          rm -rf "$BUILD" "$INSTALL"
+          cmake -S . -B "$BUILD" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF \
+            -DCMAKE_INSTALL_PREFIX="$INSTALL"
+          cmake --build "$BUILD" --target kdenlive -j2
+          cmake --install "$BUILD"
+          test -f "$INSTALL/bin/syncut.exe"
+          if command -v windeployqt6 >/dev/null 2>&1; then
+            windeployqt6 --release --no-translations "$INSTALL/bin/syncut.exe" || true
+          fi
+          while IFS= read -r dll; do
+            test -f "$dll" && cp -n "$dll" "$INSTALL/bin/" || true
+          done < <(ldd "$INSTALL/bin/syncut.exe" | awk '/=> \/ucrt64\// {print $3}' | sort -u)
+          for d in /ucrt64/lib/mlt-7 /ucrt64/share/mlt-7 /ucrt64/share/frei0r-1; do
+            if test -d "$d"; then
+              rel="${d#/ucrt64/}"
+              mkdir -p "$INSTALL/$(dirname "$rel")"
+              cp -R "$d" "$INSTALL/$(dirname "$rel")/"
+            fi
+          done
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Syncut-Alpha-Windows
+          path: dist/Syncut-Alpha
+          if-no-files-found: error

@@ -1,0 +1,11 @@
+/build*/
+/dist/
+.craft/
+CMakeCache.txt
+CMakeFiles/
+*.user
+*.suo
+*.VC.db
+*.log
+.DS_Store
+Thumbs.db
