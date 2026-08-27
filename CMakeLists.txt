@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
-# SPDX-FileCopyrightText: Vincent PINON <vincent.pinon@laposte.net>
+# SPDX-FileCopyrightText: Jean-Baptiste Mardelle <jb@kdenlive.org>
 
 set(kdenlive_SRCS
   ${kdenlive_SRCS}
-  doc/documentchecker.cpp
-  doc/dcresolvedialog.cpp
-  doc/documentcheckertreemodel.cpp
-  doc/documentvalidator.cpp
-  doc/kdenlivedoc.cpp
-  doc/kthumb.cpp
-  doc/docundostack.cpp
+  library/librarywidget.cpp
   PARENT_SCOPE)
-
