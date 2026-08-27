@@ -3,5 +3,8 @@
 
 set(kdenlive_SRCS
   ${kdenlive_SRCS}
-  library/librarywidget.cpp
-  PARENT_SCOPE)
+  monitor/scopes/scopewidget.cpp
+  monitor/scopes/monitoraudiolevel.cpp
+  monitor/scopes/audiographspectrum.cpp
+  monitor/scopes/sharedframe.cpp
+PARENT_SCOPE)
