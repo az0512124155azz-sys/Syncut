@@ -25,15 +25,25 @@ jobs:
         run: |
           copy /b syncut-source.part01+syncut-source.part02+syncut-source.part03 syncut-source.zip
 
-      - name: Extract source archive
+      - name: Extract and patch source archive
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           if (Test-Path source) { Remove-Item source -Recurse -Force }
           Expand-Archive -LiteralPath syncut-source.zip -DestinationPath source -Force
-          if (-not (Test-Path 'source\Syncut-Claude-Handoff\CMakeLists.txt')) {
+
+          $src = 'source\\Syncut-Claude-Handoff'
+          if (-not (Test-Path "$src\\CMakeLists.txt")) {
             throw 'Syncut source archive did not extract correctly.'
           }
+
+          $meltBuilder = "$src\\src\\timeline2\\model\\builders\\meltBuilder.cpp"
+          $text = Get-Content -LiteralPath $meltBuilder -Raw
+          $fixed = $text.Replace('#include "../undohelper.hpp"', '#include "undohelper.hpp"')
+          if ($fixed -eq $text) {
+            throw 'Expected undohelper include was not found in meltBuilder.cpp.'
+          }
+          Set-Content -LiteralPath $meltBuilder -Value $fixed -Encoding UTF8
 
       - name: Setup MSYS2 UCRT64
         uses: msys2/setup-msys2@v2
@@ -73,23 +83,20 @@ jobs:
           EXE="$INSTALL/bin/syncut.exe"
           if [ ! -f "$EXE" ]; then
             echo "syncut.exe was not produced"
-            find "$INSTALL" -maxdepth 3 -type f | sort
+            find "$INSTALL" -maxdepth 4 -type f | sort
             exit 2
           fi
 
-          # Deploy Qt runtime and QML modules.
           if command -v windeployqt6 >/dev/null 2>&1; then
             windeployqt6 --release --no-translations --qmldir "$SRC" "$EXE" || true
           elif command -v windeployqt >/dev/null 2>&1; then
             windeployqt --release --no-translations --qmldir "$SRC" "$EXE" || true
           fi
 
-          # Copy direct UCRT64 DLL dependencies.
           while IFS= read -r dll; do
             [ -f "$dll" ] && cp -n "$dll" "$INSTALL/bin/" || true
           done < <(ldd "$EXE" | awk '/=> \/ucrt64\// {print $3}' | sort -u)
 
-          # MLT and frei0r runtime modules/data.
           for d in /ucrt64/lib/mlt-7 /ucrt64/share/mlt-7 /ucrt64/share/frei0r-1; do
             if [ -d "$d" ]; then
               rel="${d#/ucrt64/}"
@@ -109,7 +116,7 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          Compress-Archive -Path 'dist\Syncut\*' -DestinationPath 'Syncut-Alpha-0.1-Windows-x64-Portable.zip' -Force
+          Compress-Archive -Path 'dist\\Syncut\\*' -DestinationPath 'Syncut-Alpha-0.1-Windows-x64-Portable.zip' -Force
 
       - name: Install NSIS
         shell: powershell
@@ -124,7 +131,7 @@ jobs:
           Unicode true
           Name "Syncut Alpha 0.1"
           OutFile "Syncut-Alpha-0.1-Windows-x64-Setup.exe"
-          InstallDir "$LOCALAPPDATA\Programs\Syncut"
+          InstallDir "$LOCALAPPDATA\\Programs\\Syncut"
           RequestExecutionLevel user
           SetCompressor /SOLID lzma
           ShowInstDetails show
@@ -137,29 +144,29 @@ jobs:
 
           Section "Syncut" SEC_MAIN
             SetOutPath "$INSTDIR"
-            File /r "dist\Syncut\*.*"
-            CreateDirectory "$SMPROGRAMS\Syncut"
-            CreateShortcut "$SMPROGRAMS\Syncut\Syncut.lnk" "$INSTDIR\bin\syncut.exe" "" "$INSTDIR\bin\syncut.exe" 0
-            CreateShortcut "$DESKTOP\Syncut.lnk" "$INSTDIR\bin\syncut.exe" "" "$INSTDIR\bin\syncut.exe" 0
-            WriteUninstaller "$INSTDIR\Uninstall.exe"
-            WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayName" "Syncut Alpha 0.1"
-            WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayVersion" "0.1"
-            WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "Publisher" "Syncut"
-            WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "InstallLocation" "$INSTDIR"
-            WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayIcon" "$INSTDIR\bin\syncut.exe"
-            WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "UninstallString" '"$INSTDIR\Uninstall.exe"'
+            File /r "dist\\Syncut\\*.*"
+            CreateDirectory "$SMPROGRAMS\\Syncut"
+            CreateShortcut "$SMPROGRAMS\\Syncut\\Syncut.lnk" "$INSTDIR\\bin\\syncut.exe" "" "$INSTDIR\\bin\\syncut.exe" 0
+            CreateShortcut "$DESKTOP\\Syncut.lnk" "$INSTDIR\\bin\\syncut.exe" "" "$INSTDIR\\bin\\syncut.exe" 0
+            WriteUninstaller "$INSTDIR\\Uninstall.exe"
+            WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Syncut" "DisplayName" "Syncut Alpha 0.1"
+            WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Syncut" "DisplayVersion" "0.1"
+            WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Syncut" "Publisher" "Syncut"
+            WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Syncut" "InstallLocation" "$INSTDIR"
+            WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Syncut" "DisplayIcon" "$INSTDIR\\bin\\syncut.exe"
+            WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Syncut" "UninstallString" '"$INSTDIR\\Uninstall.exe"'
           SectionEnd
 
           Section "Uninstall"
-            Delete "$DESKTOP\Syncut.lnk"
-            Delete "$SMPROGRAMS\Syncut\Syncut.lnk"
-            RMDir "$SMPROGRAMS\Syncut"
-            DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut"
+            Delete "$DESKTOP\\Syncut.lnk"
+            Delete "$SMPROGRAMS\\Syncut\\Syncut.lnk"
+            RMDir "$SMPROGRAMS\\Syncut"
+            DeleteRegKey HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Syncut"
             RMDir /r "$INSTDIR"
           SectionEnd
           '@ | Set-Content -Encoding UTF8 installer.nsi
 
-          & "$env:ProgramFiles(x86)\NSIS\makensis.exe" installer.nsi
+          & "$env:ProgramFiles(x86)\\NSIS\\makensis.exe" installer.nsi
           if (-not (Test-Path 'Syncut-Alpha-0.1-Windows-x64-Setup.exe')) {
             throw 'NSIS installer was not produced.'
           }
