@@ -1,227 +1,360 @@
 /*
-    SPDX-FileCopyrightText: 2016 Jean-Baptiste Mardelle <jb@kdenlive.org>
+    SPDX-FileCopyrightText: 2024 Étienne André <eti.andre@gmail.com>
 
-SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
+    SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
 */
 
 #include "generators.h"
+
 #include "core.h"
-#include "doc/kthumb.h"
-#include "kdenlivesettings.h"
-#include "klocalizedstring.h"
-#include "profiles/profilemodel.hpp"
-#include "widgets/timecodedisplay.h"
-#include "xml/xml.hpp"
+#include "definitions.h"
+#include <KLocalizedString>
+#include <KMessageWidget>
+#include <QDebug>
+#include <QElapsedTimer>
+#include <QVector>
 
-#include <QDialogButtonBox>
-#include <QDir>
-#include <QDomDocument>
-#include <QFileDialog>
-#include <QLabel>
-#include <QStandardPaths>
-#include <QVBoxLayout>
-
-#include <KMessageBox>
-#include <KRecentDirs>
-#include <memory>
-#include <mlt++/MltConsumer.h>
+#include <mlt++/MltFilter.h>
+#include <mlt++/MltFrame.h>
 #include <mlt++/MltProducer.h>
-#include <mlt++/MltProfile.h>
-#include <mlt++/MltTractor.h>
 
-Generators::Generators(const QString &path, QWidget *parent)
-    : QDialog(parent)
-    , m_producer(nullptr)
-    , m_timePos(nullptr)
-    , m_container(nullptr)
-    , m_preview(nullptr)
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavutil/audio_fifo.h>
+#include <libavutil/channel_layout.h>
+#include <libavutil/samplefmt.h>
+#include <libswresample/swresample.h>
+}
+
+// The av_err2str macro in libavutil/error.h does not play nice with C++
+#ifdef av_err2str
+#undef av_err2str
+av_always_inline QString av_err2string(int errnum)
 {
-    QDomDocument doc;
-    if (!Xml::docContentFromFile(doc, path, false)) {
-        return;
+    char errbuf[AV_ERROR_MAX_STRING_SIZE];
+    return av_make_error_string(errbuf, AV_ERROR_MAX_STRING_SIZE, errnum);
+}
+#define av_err2str(err) av_err2string(err).toLatin1().constData();
+#endif // av_err2str
+
+void computePeaks(const int16_t *in, int16_t *out, const size_t nChannels, const size_t nSamplesIn, const size_t nSamplesOut)
+{
+    Q_ASSERT(in != nullptr);
+    Q_ASSERT(out != nullptr);
+    Q_ASSERT(nSamplesOut > 0);
+    Q_ASSERT(nSamplesIn > 0);
+    Q_ASSERT(nChannels > 0);
+
+    const float scale = static_cast<float>(nSamplesIn) / nSamplesOut;
+
+    for (size_t ch = 0; ch < nChannels; ++ch) {
+        const auto *pIn = in + ch; // Pointer to the start of the current channel in the input
+        auto *pOut = out + ch;     // Pointer to the start of the current channel in the output
+
+        for (size_t outIdx = 0; outIdx < nSamplesOut; ++outIdx) {
+            // [start, end] is a sliding window over the input samples
+            const size_t start = outIdx * scale;
+            size_t end = (outIdx + 1) * scale;
+            if (end > nSamplesIn) end = nSamplesIn;
+
+            Q_ASSERT(start < nSamplesIn);
+            Q_ASSERT(outIdx < nSamplesOut);
+
+            int16_t maxValue = std::abs(pIn[start * nChannels]);
+            for (size_t inIdx = start; inIdx < end; ++inIdx) {
+                maxValue = std::max(maxValue, static_cast<int16_t>(std::abs(pIn[inIdx * nChannels])));
+            }
+            pOut[outIdx * nChannels] = maxValue;
+        }
+    }
+}
+
+QVector<int16_t> generateMLT(const size_t streamIdx, const QString &service, const QString &resource, int channels,
+                             const std::function<void(int progress, const QVector<int16_t> &levels)> &progressCallback, const QAtomicInt &isCanceled,
+                             int duration)
+{
+    qDebug() << "Generating audio levels for stream" << streamIdx << "of" << resource << "using MLT";
+    QElapsedTimer timer;
+    timer.start();
+
+    // Create a new, separate producer for this clip. It will have the same fps as the current project profile
+    Mlt::Producer aProd(pCore->getProjectProfile(), service.toUtf8().constData(), resource.toUtf8().constData());
+    if (!aProd.is_valid()) {
+        qWarning() << "Could not create producer for" << service << ":" << resource;
+        return {};
+    }
+    aProd.set("video_index", -1); // disable video
+    aProd.set("audio_index", static_cast<int>(streamIdx));
+    aProd.set("cache", 0); // disable caching, should help with performance
+    if (duration > 0) {
+        aProd.set("length", duration);
     }
 
-    QDomElement base = doc.documentElement();
-    if (base.tagName() == QLatin1String("generator")) {
-        QString generatorTag = base.attribute(QStringLiteral("tag"));
-        setWindowTitle(i18n(base.firstChildElement(QStringLiteral("name")).text().toUtf8().data()));
-        auto *lay = new QVBoxLayout(this);
-        m_preview = new QLabel;
-        m_preview->setMinimumSize(1, 1);
-        lay->addWidget(m_preview);
-        m_producer = new Mlt::Producer(pCore->getProjectProfile(), generatorTag.toUtf8().constData());
-        m_pixmap = QPixmap::fromImage(KThumb::getFrame(m_producer, 0, pCore->getCurrentProfile()->width(), pCore->getCurrentProfile()->height()));
-        m_preview->setPixmap(m_pixmap.scaledToWidth(m_preview->width()));
-        auto *hlay = new QHBoxLayout;
-        hlay->addWidget(new QLabel(i18n("Duration:")));
-        m_timePos = new TimecodeDisplay(this);
-        if (base.hasAttribute(QStringLiteral("updateonduration"))) {
-            connect(m_timePos, &TimecodeDisplay::timeCodeEditingFinished, this, &Generators::updateDuration);
+    int sampleRate = 44100;                                                // Request this sample rate (MLT will resample under the hood)
+    Mlt::Filter convertFilter(pCore->getProjectProfile(), "audioconvert"); // add a filter to convert the sample format
+    aProd.attach(convertFilter);
+
+    const double framesPerSecond = aProd.get_fps();
+    const int lengthInFrames = aProd.get_length();
+    mlt_audio_format audioFormat = mlt_audio_s16; // target sample format == interleaved uint16_t
+
+    QVector<int16_t> levels(lengthInFrames * AUDIOLEVELS_POINTS_PER_FRAME * channels);
+    int interval = qMax(1, lengthInFrames / 100);
+    for (int f = 0; f < lengthInFrames; ++f) {
+        if (isCanceled) {
+            levels.clear();
+            break;
         }
-        hlay->addWidget(m_timePos);
-        lay->addLayout(hlay);
-        QWidget *frameWidget = new QWidget;
-        lay->addWidget(frameWidget);
 
-        m_view = new AssetParameterView(frameWidget);
-        lay->addWidget(m_view);
-        QString tag = base.attribute(QStringLiteral("tag"), QString());
-
-        auto prop = std::make_unique<Mlt::Properties>(m_producer->get_properties());
-        m_assetModel.reset(new AssetParameterModel(std::move(prop), base, tag, ObjectId())); // NOLINT
-        m_view->setModel(m_assetModel, QSize(1920, 1080), false);
-        connect(m_assetModel.get(), &AssetParameterModel::modelChanged, this, [this]() { updateProducer(); });
-
-        lay->addStretch(10);
-        QDialogButtonBox *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-        connect(buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
-        connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
-        lay->addWidget(buttonBox);
-        m_timePos->setValue(KdenliveSettings::color_duration());
-        if (base.attribute(QStringLiteral("type")).contains(QLatin1String("audio"))) {
-            // Always produces audio
-            m_audioCondition.insert(QStringLiteral("audio"), {});
+        auto mltFrame = std::unique_ptr<Mlt::Frame>(aProd.get_frame());
+        if (mltFrame && mltFrame->is_valid()) {
+            int samples = mlt_audio_calculate_frame_samples(static_cast<float>(framesPerSecond), sampleRate, f);
+            const auto buf = static_cast<int16_t *>(mltFrame->get_audio(audioFormat, sampleRate, channels, samples));
+            if (buf != nullptr) {
+                computePeaks(buf, &levels[f * AUDIOLEVELS_POINTS_PER_FRAME * channels], channels, samples, AUDIOLEVELS_POINTS_PER_FRAME);
+            } else {
+                qWarning() << "null audio buffer at frame" << f << "in" << resource << ", skipping";
+            }
         } else {
-            // Check if this generator can provide audio
-            QDomNodeList params = base.elementsByTagName(QStringLiteral("parameter"));
-            for (int i = 0; i < params.count(); ++i) {
-                QDomElement currentParameter = params.item(i).toElement();
-                if (currentParameter.hasAttribute(QLatin1String("audio"))) {
-                    const QString audioVals = currentParameter.attribute(QStringLiteral("audio"));
-                    QStringList audioValsList;
-                    if (audioVals.contains(QLatin1Char(';'))) {
-                        audioValsList = audioVals.split(QLatin1Char(';'), Qt::SkipEmptyParts);
-                    } else {
-                        audioValsList = {audioVals};
-                    }
-                    m_audioCondition.insert(currentParameter.attribute(QStringLiteral("name")), audioValsList);
+            qWarning() << "invalid frame" << f;
+            levels.clear();
+            break;
+        }
+        if (f % interval == 0) {
+            // Callback 100 times during progress
+            progressCallback(100.0 * f / lengthInFrames, levels);
+        }
+    }
+
+    qDebug() << "Audio levels generation took" << timer.elapsed() / 1000.0 << "s (" << lengthInFrames / (timer.elapsed() / 1000.0) << "frames/s)";
+    return levels;
+}
+
+QVector<int16_t> generateLibav(const size_t streamIdx, const QString &uri, const size_t MLTlengthInFrames, const double MLTfps,
+                               const std::function<void(int progress, const QVector<int16_t> &levels)> &progressCallback, const QAtomicInt &isCanceled)
+{
+    qDebug() << "Generating audio levels for stream" << streamIdx << "of" << uri << "using libav";
+    QElapsedTimer timer;
+    timer.start();
+
+    int ret = 0;
+    size_t MLTFrameCount = 0;
+
+    AVFormatContext *fmt_ctx = nullptr;
+    const AVCodec *codec = nullptr;
+    AVPacket *packet = av_packet_alloc();
+    AVFrame *frame = av_frame_alloc();
+    const AVStream *stream = nullptr;
+    AVCodecContext *codec_ctx = nullptr;
+    QVector<int16_t> levels;
+    SwrContext *swr_ctx = nullptr;
+
+    uint8_t **buf = nullptr;
+    int buf_nbsamples = 0, max_buf_nbsamples = 0;
+    int src_rate, dst_rate;
+    int src_nb_channels, dst_nb_channels;
+    int dst_linesize;
+    int dst_nb_samples = 0;
+    int samplesPerMLTFrame = 0;
+    AVSampleFormat src_sample_fmt, dst_sample_fmt;
+    AVChannelLayout *src_ch_layout, *dst_ch_layout;
+    AVAudioFifo *fifo = nullptr;
+
+    // Open file
+    ret = avformat_open_input(&fmt_ctx, uri.toLocal8Bit().data(), nullptr, nullptr);
+    if (ret < 0) {
+        qWarning() << "Could not open input file" << uri << ":" << av_err2string(ret);
+        goto cleanup;
+    }
+    ret = avformat_find_stream_info(fmt_ctx, nullptr);
+    if (ret < 0) {
+        qWarning() << "Could not find stream information:" << av_err2string(ret);
+        goto cleanup;
+    }
+
+    if (streamIdx >= fmt_ctx->nb_streams) {
+        qWarning() << "Invalid stream index" << streamIdx;
+        goto cleanup;
+    }
+
+    // Find and open codec for requested stream
+    stream = fmt_ctx->streams[streamIdx];
+
+    // check for delay
+    if (stream->start_time > 0) {
+        // TODO: Handle delay in our libav code
+        // Stream with a delay, not currently handled in our avformat code, switch to MLT
+        qWarning() << "Stream with delay, switching to MLT" << streamIdx;
+        goto cleanup;
+    }
+
+    // Set discard flag for all streams except our target audio stream to reduce unnecessary I/O operations
+    for (unsigned int i = 0; i < fmt_ctx->nb_streams; i++) {
+        if (i != streamIdx) {
+            fmt_ctx->streams[i]->discard = AVDISCARD_ALL;
+        }
+    }
+
+    codec = avcodec_find_decoder(stream->codecpar->codec_id);
+    if (!codec) {
+        qWarning() << "No suitable decoder found for" << avcodec_get_name(stream->codecpar->codec_id);
+        goto cleanup;
+    }
+
+    codec_ctx = avcodec_alloc_context3(codec);
+    if (!codec_ctx) {
+        qWarning() << "Failed to allocate codec context";
+        goto cleanup;
+    }
+
+    ret = avcodec_parameters_to_context(codec_ctx, stream->codecpar);
+    if (ret < 0) {
+        qWarning() << "Failed to copy codec parameters to codec:" << av_err2string(ret);
+        goto cleanup;
+    }
+
+    // Request s16 to codec, if possible
+    codec_ctx->request_sample_fmt = AV_SAMPLE_FMT_S16; // == interleaved uint16_t
+
+    ret = avcodec_open2(codec_ctx, codec, nullptr);
+    if (ret < 0) {
+        qWarning() << "Failed to open codec:" << av_err2string(ret);
+        goto cleanup;
+    }
+
+    // Add a sample format converter (will no-op if the codec is able to directly output s16)
+    src_ch_layout = &codec_ctx->ch_layout;
+    dst_ch_layout = src_ch_layout;
+    src_nb_channels = codec_ctx->ch_layout.nb_channels;
+    dst_nb_channels = src_nb_channels;
+    src_sample_fmt = codec_ctx->sample_fmt;
+    dst_sample_fmt = AV_SAMPLE_FMT_S16;
+    src_rate = codec_ctx->sample_rate;
+    dst_rate = src_rate;
+
+    ret = swr_alloc_set_opts2(&swr_ctx, dst_ch_layout, dst_sample_fmt, dst_rate, src_ch_layout, src_sample_fmt, src_rate, 0, nullptr);
+    if (ret < 0) {
+        qWarning() << "Failed to set SwrContext options:" << av_err2string(ret);
+        goto cleanup;
+    }
+
+    if ((ret = swr_init(swr_ctx)) < 0) {
+        qWarning() << "Failed to initialize SwrContext:" << av_err2string(ret);
+        goto cleanup;
+    }
+
+    // Allocate fifo with a bit of space (will be grown automatically)
+    samplesPerMLTFrame = mlt_audio_calculate_frame_samples(MLTfps, dst_rate, 0);
+    fifo = av_audio_fifo_alloc(dst_sample_fmt, dst_nb_channels, 2 * samplesPerMLTFrame);
+
+    // Allocate levels
+    levels.resize(MLTlengthInFrames * AUDIOLEVELS_POINTS_PER_FRAME * dst_nb_channels);
+
+    // /!\ libav frames != MLT frames !
+    // Read each packet in the stream
+    while (av_read_frame(fmt_ctx, packet) >= 0) {
+        if (isCanceled) {
+            levels.clear();
+            break;
+        }
+
+        if (packet->stream_index != streamIdx) {
+            av_packet_unref(packet);
+            continue;
+        }
+
+        // Send encoded packet to the decoder .....
+        if ((ret = avcodec_send_packet(codec_ctx, packet)) < 0) {
+            qWarning() << "Error sending packet for decoding: " << av_err2string(ret);
+            levels.clear();
+            break;
+        }
+        int interval = qMax(1, static_cast<int>(MLTlengthInFrames / 100));
+
+        // .... which can output more than 1 audio frame per packet
+        while (ret >= 0) {
+            ret = avcodec_receive_frame(codec_ctx, frame);
+            if (ret == AVERROR(EAGAIN)) {
+                break; // we're done with this packet
+            }
+            if (ret < 0) {
+                qWarning() << "Error during decoding: " << av_err2string(ret);
+                levels.clear();
+                goto cleanup;
+            }
+
+            // Grow the output buffer (only if needed) to be able to store either the output from swr, or a full MLT frame's worth of data.
+            dst_nb_samples = swr_get_out_samples(swr_ctx, frame->nb_samples);
+            buf_nbsamples = std::max(dst_nb_samples, samplesPerMLTFrame);
+            if (buf_nbsamples > max_buf_nbsamples) {
+                if (buf) {
+                    av_freep(&buf[0]);
                 }
+                av_freep(&buf);
+                ret = av_samples_alloc_array_and_samples(&buf, &dst_linesize, dst_nb_channels, buf_nbsamples, dst_sample_fmt, 0);
+                if (ret < 0) {
+                    qWarning() << "Failed to allocate output buffer:" << av_err2string(ret);
+                    levels.clear();
+                    goto cleanup;
+                }
+                max_buf_nbsamples = buf_nbsamples;
+            }
+
+            // Convert sample format, put data into buffer
+            ret = swr_convert(swr_ctx, buf, dst_nb_samples, const_cast<const uint8_t **>(frame->extended_data), frame->nb_samples);
+            if (ret <= 0) {
+                qWarning() << "Failed to convert samples:" << av_err2string(ret);
+                levels.clear();
+                goto cleanup;
+            }
+
+            // Write the buffer into the fifo (grows automatically if needed)
+            ret = av_audio_fifo_write(fifo, reinterpret_cast<void **>(buf), dst_nb_samples);
+            if (ret < 0) {
+                qWarning() << "Failed to write samples to audio fifo:" << av_err2string(ret);
+                levels.clear();
+                goto cleanup;
+            }
+
+            // If there is enough samples for one MLT frame in the fifo, compute the peaks and advance one MLT frame !
+            while (av_audio_fifo_size(fifo) >= samplesPerMLTFrame) {
+                av_audio_fifo_read(fifo, reinterpret_cast<void **>(buf), samplesPerMLTFrame);
+                const size_t requiredSize = (MLTFrameCount + 1) * AUDIOLEVELS_POINTS_PER_FRAME * dst_nb_channels;
+                if (requiredSize > levels.size()) {
+                    levels.resize(requiredSize);
+                }
+                computePeaks(reinterpret_cast<const int16_t *>(buf[0]), levels.data() + MLTFrameCount * AUDIOLEVELS_POINTS_PER_FRAME * dst_nb_channels,
+                             dst_nb_channels, samplesPerMLTFrame, AUDIOLEVELS_POINTS_PER_FRAME);
+
+                if (MLTFrameCount % interval == 0) {
+                    progressCallback(100.0 * MLTFrameCount / MLTlengthInFrames, levels);
+                }
+
+                MLTFrameCount++;
+                if (MLTFrameCount > MLTlengthInFrames) {
+                    qWarning() << "MLT frame" << MLTFrameCount << "of" << MLTlengthInFrames << "is beyond the MLT length !!!";
+                    levels.clear();
+                    goto cleanup;
+                }
+                samplesPerMLTFrame = mlt_audio_calculate_frame_samples(MLTfps, dst_rate, MLTFrameCount);
             }
         }
-    }
-}
 
-void Generators::updateProducer()
-{
-    int w = m_pixmap.width();
-    int h = m_pixmap.height();
-    m_pixmap = QPixmap::fromImage(KThumb::getFrame(m_producer, 0, w, h));
-    m_preview->setPixmap(m_pixmap.scaledToWidth(m_preview->width()));
-}
+        av_packet_unref(packet);
+    }
+cleanup:
+    if (buf) {
+        av_freep(&buf[0]);
+    }
+    av_freep(&buf);
+    av_audio_fifo_free(fifo);
+    av_frame_free(&frame);
+    av_packet_free(&packet);
+    avcodec_free_context(&codec_ctx);
+    swr_free(&swr_ctx);
+    avformat_close_input(&fmt_ctx);
 
-void Generators::resizeEvent(QResizeEvent *event)
-{
-    QDialog::resizeEvent(event);
-    m_preview->setPixmap(m_pixmap.scaledToWidth(m_preview->width()));
-}
-
-Generators::~Generators()
-{
-    delete m_timePos;
-}
-
-// static
-void Generators::getGenerators(const QStringList &producers, QMenu *menu)
-{
-    const QStringList generatorFolders =
-        QStandardPaths::locateAll(QStandardPaths::AppDataLocation, QStringLiteral("generators"), QStandardPaths::LocateDirectory);
-    const QStringList filters = QStringList() << QStringLiteral("*.xml");
-    QStringList parsedGenerators;
-    for (const QString &folder : generatorFolders) {
-        QDir directory(folder);
-        const QStringList filenames = directory.entryList(filters, QDir::Files);
-        for (const QString &fname : filenames) {
-            if (parsedGenerators.contains(fname)) {
-                continue;
-            }
-            parsedGenerators << fname;
-            QPair<QString, QString> result = parseGenerator(directory.absoluteFilePath(fname), producers);
-            if (!result.first.isEmpty()) {
-                QAction *action = menu->addAction(i18n(result.first.toUtf8().data()));
-                action->setData(result.second);
-            }
-        }
-    }
-}
-
-// static
-QPair<QString, QString> Generators::parseGenerator(const QString &path, const QStringList &producers)
-{
-    QPair<QString, QString> result;
-    QDomDocument doc;
-    if (!Xml::docContentFromFile(doc, path, false)) {
-        return result;
-    }
-
-    QDomElement base = doc.documentElement();
-    if (base.tagName() == QLatin1String("generator")) {
-        QString generatorTag = base.attribute(QStringLiteral("tag"));
-        if (producers.contains(generatorTag)) {
-            result.first = base.firstChildElement(QStringLiteral("name")).text();
-            result.second = path;
-        }
-    }
-    return result;
-}
-
-void Generators::updateDuration(int duration)
-{
-    m_producer->set("length", duration);
-    m_producer->set_in_and_out(0, duration - 1);
-    updateProducer();
-}
-
-QUrl Generators::getSavedClip(QString clipFolder)
-{
-    if (clipFolder.isEmpty()) {
-        clipFolder = KRecentDirs::dir(QStringLiteral(":KdenliveClipFolder"));
-    }
-    if (clipFolder.isEmpty()) {
-        clipFolder = QDir::homePath();
-    }
-    QFileDialog fd(this);
-    fd.setDirectory(clipFolder);
-    fd.setNameFilter(i18n("MLT Playlist (*.mlt)"));
-    fd.setAcceptMode(QFileDialog::AcceptSave);
-    fd.setFileMode(QFileDialog::AnyFile);
-    fd.setDefaultSuffix(QStringLiteral("mlt"));
-    if (fd.exec() != QDialog::Accepted || fd.selectedUrls().isEmpty()) {
-        return QUrl();
-    }
-    QUrl url = fd.selectedUrls().constFirst();
-
-    if (url.isValid()) {
-        Mlt::Tractor trac(pCore->getProjectProfile());
-        Mlt::Playlist playlist(pCore->getProjectProfile());
-        m_producer->set("length", m_timePos->getValue());
-        m_producer->set_in_and_out(0, m_timePos->getValue() - 1);
-        playlist.append(*m_producer);
-        trac.set_track(playlist, 0);
-        if (!hasAudio()) {
-            Mlt::Producer trackProducer(trac.track(0));
-            trackProducer.set("hide", 2);
-        }
-        QReadLocker lock(&pCore->xmlMutex);
-        Mlt::Consumer c(pCore->getProjectProfile(), "xml", url.toLocalFile().toUtf8().constData());
-        c.connect(trac);
-        c.run();
-        return url;
-    }
-    return QUrl();
-}
-
-bool Generators::hasAudio() const
-{
-    if (m_audioCondition.isEmpty()) {
-        return false;
-    }
-    const QStringList paramCondition = m_audioCondition.value(m_audioCondition.firstKey());
-    if (paramCondition.isEmpty()) {
-        return true;
-    }
-    const QString paramVal = m_producer->get(m_audioCondition.firstKey().toUtf8().constData());
-    if (paramCondition.contains(paramVal)) {
-        return true;
-    }
-    return false;
+    qDebug() << "Audio levels generation took" << timer.elapsed() / 1000.0 << "s (" << MLTlengthInFrames / (timer.elapsed() / 1000.0) << "frames/s)";
+    return levels;
 }
