@@ -88,25 +88,21 @@ jobs:
 
           cp "$BUILT_EXE" "$INSTALL/bin/syncut.exe"
 
-          # Copy generated QML module directly from the build tree.
           if [ -d "$BUILD/bin/org/kde/kdenlive" ]; then
             mkdir -p "$INSTALL/lib/qml/org/kde"
             cp -R "$BUILD/bin/org/kde/kdenlive" "$INSTALL/lib/qml/org/kde/"
           fi
 
-          # Deploy Qt runtime.
           if command -v windeployqt6 >/dev/null 2>&1; then
             windeployqt6 --release --no-translations --qmldir "$SRC" "$INSTALL/bin/syncut.exe" || true
           elif command -v windeployqt >/dev/null 2>&1; then
             windeployqt --release --no-translations --qmldir "$SRC" "$INSTALL/bin/syncut.exe" || true
           fi
 
-          # Copy all direct UCRT64 DLL dependencies of the executable.
           while IFS= read -r dll; do
             [ -f "$dll" ] && cp -n "$dll" "$INSTALL/bin/" || true
           done < <(ldd "$INSTALL/bin/syncut.exe" | awk '/=> \/ucrt64\// {print $3}' | sort -u)
 
-          # Include MLT/frei0r runtime modules and data.
           for d in \
             /ucrt64/lib/mlt-7 \
             /ucrt64/share/mlt-7 \
@@ -119,14 +115,12 @@ jobs:
             fi
           done
 
-          # Useful multimedia tools that Kdenlive/Syncut may call at runtime.
           for tool in ffmpeg.exe ffprobe.exe melt-7.exe; do
             if [ -f "/ucrt64/bin/$tool" ]; then
               cp -n "/ucrt64/bin/$tool" "$INSTALL/bin/"
             fi
           done
 
-          # Copy important runtime data if present.
           for d in \
             /ucrt64/share/kdenlive \
             /ucrt64/share/icons \
@@ -150,9 +144,6 @@ jobs:
           No AI model is installed automatically.
           TXT
 
-          echo "Portable tree:"
-          find "$INSTALL" -maxdepth 3 -type f | sort | head -200
-
       - name: Create portable ZIP
         shell: powershell
         run: |
@@ -162,7 +153,39 @@ jobs:
       - name: Install NSIS
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
           choco install nsis -y --no-progress
+
+          $candidates = @(
+            "$env:ProgramFiles\NSIS\makensis.exe",
+            "${env:ProgramFiles(x86)}\NSIS\makensis.exe",
+            "C:\ProgramData\chocolatey\bin\makensis.exe"
+          )
+
+          $makensis = $null
+          foreach ($candidate in $candidates) {
+            if ($candidate -and (Test-Path $candidate)) {
+              $makensis = $candidate
+              break
+            }
+          }
+
+          if (-not $makensis) {
+            $cmd = Get-Command makensis.exe -ErrorAction SilentlyContinue
+            if ($cmd) { $makensis = $cmd.Source }
+          }
+
+          if (-not $makensis) {
+            $found = Get-ChildItem -Path 'C:\Program Files','C:\Program Files (x86)','C:\ProgramData\chocolatey' -Filter makensis.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { $makensis = $found.FullName }
+          }
+
+          if (-not $makensis) {
+            throw 'NSIS installation failed: makensis.exe was not found.'
+          }
+
+          "MAKENSIS=$makensis" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "NSIS found at: $makensis"
 
       - name: Create Windows installer
         shell: powershell
@@ -212,7 +235,15 @@ jobs:
           SectionEnd
           '@ | Set-Content -Encoding UTF8 installer.nsi
 
-          & "$env:ProgramFiles(x86)\NSIS\makensis.exe" installer.nsi
+          if (-not $env:MAKENSIS) {
+            throw 'MAKENSIS path was not exported by the Install NSIS step.'
+          }
+
+          & $env:MAKENSIS installer.nsi
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "makensis.exe failed with exit code $LASTEXITCODE"
+          }
 
           if (-not (Test-Path 'Syncut-Alpha-0.1-Windows-x64-Setup.exe')) {
             throw 'NSIS installer was not produced.'
