@@ -21,11 +21,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Reassemble source archive
+      - name: Reassemble Syncut source
         shell: cmd
         run: copy /b syncut-source.part01+syncut-source.part02+syncut-source.part03 syncut-source.zip
 
-      - name: Extract and patch source
+      - name: Extract source
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -34,14 +34,17 @@ jobs:
 
           $src = 'source\Syncut-Claude-Handoff'
           if (-not (Test-Path "$src\CMakeLists.txt")) {
-            throw 'Source archive is invalid.'
+            throw 'Syncut source archive did not extract correctly.'
           }
 
-          $file = "$src\src\timeline2\model\builders\meltBuilder.cpp"
-          if (Test-Path $file) {
-            $text = Get-Content -LiteralPath $file -Raw
-            $text = $text.Replace('#include "../undohelper.hpp"', '#include "undohelper.hpp"')
-            Set-Content -LiteralPath $file -Value $text -Encoding UTF8
+          # Keep compatibility with the old source snapshot if this include ever reappears.
+          $meltBuilder = "$src\src\timeline2\model\builders\meltBuilder.cpp"
+          if (Test-Path $meltBuilder) {
+            $text = Get-Content -LiteralPath $meltBuilder -Raw
+            $fixed = $text.Replace('#include "../undohelper.hpp"', '#include "undohelper.hpp"')
+            if ($fixed -ne $text) {
+              Set-Content -LiteralPath $meltBuilder -Value $fixed -Encoding UTF8
+            }
           }
 
       - name: Setup MSYS2 UCRT64
@@ -87,7 +90,7 @@ jobs:
           test -f "$INSTALL/bin/syncut.exe"
           test -f "$INSTALL/bin/kdenlive_render.exe"
 
-      - name: Deploy complete Windows runtime and QML
+      - name: Deploy Qt QML MLT FFmpeg runtime
         shell: msys2 {0}
         run: |
           set -euo pipefail
@@ -104,19 +107,13 @@ jobs:
           done
 
           if [ -z "$DEPLOY" ]; then
-            echo "windeployqt was not found"
+            echo "ERROR: windeployqt was not found"
             exit 20
           fi
 
-          "$DEPLOY" \
-            --release \
-            --qmldir "$SRC" \
-            "$INSTALL/bin/syncut.exe"
-
-          echo "=== Locate Qt QML import tree ==="
+          "$DEPLOY" --release --qmldir "$SRC" "$INSTALL/bin/syncut.exe"
 
           QMLROOT=""
-
           if command -v qtpaths6.exe >/dev/null 2>&1; then
             QMLROOT="$(qtpaths6.exe --query QT_INSTALL_QML 2>/dev/null | tr -d '\r' || true)"
           elif command -v qtpaths6 >/dev/null 2>&1; then
@@ -124,11 +121,7 @@ jobs:
           fi
 
           if [ -z "$QMLROOT" ] || [ ! -d "$QMLROOT" ]; then
-            for candidate in \
-              /ucrt64/share/qt6/qml \
-              /ucrt64/lib/qt6/qml \
-              /ucrt64/qml
-            do
+            for candidate in /ucrt64/share/qt6/qml /ucrt64/lib/qt6/qml /ucrt64/qml; do
               if [ -d "$candidate" ]; then
                 QMLROOT="$candidate"
                 break
@@ -137,66 +130,74 @@ jobs:
           fi
 
           if [ -z "$QMLROOT" ] || [ ! -d "$QMLROOT" ]; then
-            echo "ERROR: Could not locate Qt QML import tree."
-            find /ucrt64 -type f -iname 'qtquickcontrols2plugin.dll' -print || true
+            echo "ERROR: Qt QML import tree was not found"
             exit 21
           fi
-
-          echo "Qt QML root: $QMLROOT"
 
           mkdir -p "$INSTALL/bin/qml"
           cp -R "$QMLROOT"/. "$INSTALL/bin/qml/"
 
-          echo "=== Verify the plugin that caused Build 8 to crash ==="
-
           CONTROLS_PLUGIN="$(find "$INSTALL/bin/qml" -type f -iname 'qtquickcontrols2plugin.dll' | head -1 || true)"
-
           if [ -z "$CONTROLS_PLUGIN" ]; then
-            echo "ERROR: qtquickcontrols2plugin.dll was not packaged."
-            find "$QMLROOT" -maxdepth 5 -type f | sort | grep -i 'QtQuick/Controls' | head -200 || true
+            echo "ERROR: qtquickcontrols2plugin.dll is missing"
             exit 22
           fi
 
-          echo "Found QtQuick.Controls plugin:"
-          echo "$CONTROLS_PLUGIN"
-
-          echo "=== Copy recursive DLL dependencies ==="
-
+          # Copy recursive DLL dependencies for every packaged EXE/DLL/QML plugin.
           for pass in 1 2 3 4 5 6; do
             copied=0
-
             while IFS= read -r f; do
               while IFS= read -r dll; do
                 [ -z "$dll" ] && continue
-
                 base="$(basename "$dll")"
-
                 if [ -f "$dll" ] && [ ! -f "$INSTALL/bin/$base" ]; then
                   cp "$dll" "$INSTALL/bin/$base"
                   copied=1
                 fi
-              done < <(
-                ldd "$f" 2>/dev/null \
-                  | awk '/=> \/ucrt64\// {print $3}' \
-                  | sort -u
-              )
-            done < <(
-              find "$INSTALL" -type f \
-                \( -iname '*.exe' -o -iname '*.dll' \)
-            )
-
+              done < <(ldd "$f" 2>/dev/null | awk '/=> \/ucrt64\// {print $3}' | sort -u)
+            done < <(find "$INSTALL" -type f \( -iname '*.exe' -o -iname '*.dll' \))
             [ "$copied" -eq 0 ] && break
           done
 
-          for tool in ffmpeg.exe ffprobe.exe melt-7.exe; do
+          # MLT melt renderer. Windows Kdenlive/Syncut expects melt.exe.
+          MELT_SRC=""
+          for candidate in \
+            /ucrt64/bin/melt.exe \
+            /ucrt64/bin/melt-7.exe \
+            /ucrt64/bin/mlt-melt.exe
+          do
+            if [ -f "$candidate" ]; then
+              MELT_SRC="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$MELT_SRC" ]; then
+            MELT_SRC="$(find /ucrt64 -type f \( -iname 'melt.exe' -o -iname 'melt-7.exe' -o -iname 'mlt-melt.exe' \) | head -1 || true)"
+          fi
+
+          if [ -z "$MELT_SRC" ] || [ ! -f "$MELT_SRC" ]; then
+            echo "ERROR: MLT melt executable was not found"
+            exit 23
+          fi
+
+          echo "Using MLT renderer: $MELT_SRC"
+          cp -f "$MELT_SRC" "$INSTALL/bin/melt.exe"
+          cp -f "$MELT_SRC" "$INSTALL/bin/melt-7.exe"
+
+          for tool in ffmpeg.exe ffprobe.exe; do
             if [ -f "/ucrt64/bin/$tool" ]; then
               cp -f "/ucrt64/bin/$tool" "$INSTALL/bin/"
+            else
+              echo "ERROR: $tool is missing"
+              exit 24
             fi
           done
 
           for d in \
             /ucrt64/lib/mlt-7 \
             /ucrt64/share/mlt-7 \
+            /ucrt64/share/mlt \
             /ucrt64/share/frei0r-1 \
             /ucrt64/share/kdenlive \
             /ucrt64/share/kxmlgui6 \
@@ -210,26 +211,24 @@ jobs:
             fi
           done
 
-          ICON="$(find "$SRC" -type f \( -iname 'syncut.ico' -o -iname '*syncut*.ico' \) | head -1 || true)"
-
-          if [ -n "$ICON" ] && [ -f "$ICON" ]; then
-            cp "$ICON" "$INSTALL/syncut.ico"
+          ICON="$SRC/data/icons/syncut.ico"
+          if [ -f "$ICON" ]; then
+            cp -f "$ICON" "$INSTALL/syncut.ico"
           fi
 
-          cat > "$INSTALL/bin/qt.conf" <<'EOF'
-          [Paths]
-          Prefix=.
-          Plugins=.
-          Qml2Imports=qml
-          QmlImports=qml
-          Translations=translations
-          EOF
+          printf '%s\n' \
+            '[Paths]' \
+            'Prefix=.' \
+            'Plugins=.' \
+            'Qml2Imports=qml' \
+            'QmlImports=qml' \
+            'Translations=translations' \
+            > "$INSTALL/bin/qt.conf"
 
-          # Remove indentation introduced by YAML block formatting.
-          sed -i 's/^          //' "$INSTALL/bin/qt.conf"
-
-          echo "=== Runtime sanity checks ==="
           test -f "$INSTALL/bin/platforms/qwindows.dll"
+          test -f "$INSTALL/bin/melt.exe"
+          test -f "$INSTALL/bin/ffmpeg.exe"
+          test -f "$INSTALL/bin/ffprobe.exe"
           test -f "$INSTALL/bin/qt.conf"
           test -n "$(find "$INSTALL/bin/qml" -type f -iname 'qtquickcontrols2plugin.dll' | head -1)"
 
@@ -237,7 +236,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-Build-9-Raw-Binaries
+          name: Syncut-Build-10-Raw-Binaries
           path: |
             build-windows/bin/syncut.exe
             build-windows/bin/kdenlive_render.exe
@@ -254,10 +253,10 @@ jobs:
           $root = Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut'
           $bin = Join-Path $root 'bin'
           $exe = Join-Path $bin 'syncut.exe'
+          $melt = Join-Path $bin 'melt.exe'
 
-          if (-not (Test-Path $exe)) {
-            throw 'syncut.exe missing.'
-          }
+          if (-not (Test-Path $exe)) { throw 'syncut.exe missing.' }
+          if (-not (Test-Path $melt)) { throw 'melt.exe missing.' }
 
           $clean = Join-Path $env:RUNNER_TEMP 'syncut-clean-profile'
           New-Item -ItemType Directory -Force -Path $clean | Out-Null
@@ -269,35 +268,23 @@ jobs:
           $env:QML_IMPORT_TRACE = '1'
           $env:QML2_IMPORT_PATH = Join-Path $bin 'qml'
           $env:QML_IMPORT_PATH = Join-Path $bin 'qml'
+          $env:MLT_PREFIX = $root
           $env:PATH = "$bin;$env:PATH"
 
           $stdout = Join-Path $env:GITHUB_WORKSPACE 'syncut-smoke-out.log'
           $stderr = Join-Path $env:GITHUB_WORKSPACE 'syncut-smoke-err.log'
 
-          $p = Start-Process `
-            -FilePath $exe `
-            -WorkingDirectory $bin `
-            -PassThru `
-            -RedirectStandardOutput $stdout `
-            -RedirectStandardError $stderr
-
-          Start-Sleep -Seconds 25
+          $p = Start-Process -FilePath $exe -WorkingDirectory $bin -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          Start-Sleep -Seconds 30
 
           if ($p.HasExited) {
             Write-Host "Syncut exited during smoke test. Exit code: $($p.ExitCode)"
-
-            if (Test-Path $stdout) {
-              Get-Content $stdout -Tail 300
-            }
-
-            if (Test-Path $stderr) {
-              Get-Content $stderr -Tail 500
-            }
-
+            if (Test-Path $stdout) { Get-Content $stdout -Tail 300 }
+            if (Test-Path $stderr) { Get-Content $stderr -Tail 700 }
             throw "Syncut runtime smoke test failed with exit code $($p.ExitCode)"
           }
 
-          Write-Host 'Syncut stayed alive for 25 seconds. Runtime smoke test passed.'
+          Write-Host 'Syncut stayed alive for 30 seconds. Runtime smoke test passed.'
           Stop-Process -Id $p.Id -Force
 
       - name: Capture crash backtrace
@@ -306,10 +293,9 @@ jobs:
         shell: msys2 {0}
         run: |
           INSTALL="$GITHUB_WORKSPACE/dist/Syncut"
-
           cd "$INSTALL/bin"
-
           export PATH="$INSTALL/bin:/ucrt64/bin:$PATH"
+          export MLT_PREFIX="$INSTALL"
           export QT_DEBUG_PLUGINS=1
           export QML_IMPORT_TRACE=1
           export QML2_IMPORT_PATH="$INSTALL/bin/qml"
@@ -326,7 +312,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-Build-9-Runtime-Diagnostics
+          name: Syncut-Build-10-Runtime-Diagnostics
           path: |
             syncut-smoke-out.log
             syncut-smoke-err.log
@@ -338,17 +324,12 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-
-          Compress-Archive `
-            -Path 'dist\Syncut\*' `
-            -DestinationPath 'Syncut-Alpha-0.1-Windows-x64-Portable.zip' `
-            -Force
+          Compress-Archive -Path 'dist\Syncut\*' -DestinationPath 'Syncut-Alpha-0.2-Windows-x64-Portable.zip' -Force
 
       - name: Install NSIS
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-
           choco install nsis -y --no-progress
 
           $candidates = @(
@@ -357,57 +338,30 @@ jobs:
             'C:\ProgramData\chocolatey\bin\makensis.exe'
           )
 
-          $makensis = $candidates |
-            Where-Object { $_ -and (Test-Path $_) } |
-            Select-Object -First 1
-
+          $makensis = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
           if (-not $makensis) {
             $cmd = Get-Command makensis.exe -ErrorAction SilentlyContinue
-
-            if ($cmd) {
-              $makensis = $cmd.Source
-            }
+            if ($cmd) { $makensis = $cmd.Source }
           }
+          if (-not $makensis) { throw 'makensis.exe not found.' }
 
-          if (-not $makensis) {
-            throw 'makensis.exe not found.'
-          }
-
-          "MAKENSIS=$makensis" |
-            Out-File `
-              -FilePath $env:GITHUB_ENV `
-              -Encoding utf8 `
-              -Append
+          "MAKENSIS=$makensis" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Create Windows installer
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-
-          if (-not (Test-Path 'installer.nsi')) {
-            throw 'installer.nsi missing.'
-          }
-
-          if (-not $env:MAKENSIS) {
-            throw 'MAKENSIS path missing.'
-          }
-
+          if (-not (Test-Path 'installer.nsi')) { throw 'installer.nsi missing.' }
           & $env:MAKENSIS installer.nsi
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "makensis failed with exit code $LASTEXITCODE"
-          }
-
-          if (-not (Test-Path 'Syncut-Alpha-0.1-Windows-x64-Setup.exe')) {
-            throw 'Installer was not produced.'
-          }
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
+          if (-not (Test-Path 'Syncut-Alpha-0.2-Windows-x64-Setup.exe')) { throw 'Installer was not produced.' }
 
       - name: Upload final installer
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-Windows-Installer-Build-9
+          name: Syncut-Windows-Installer-Build-10
           path: |
-            Syncut-Alpha-0.1-Windows-x64-Setup.exe
-            Syncut-Alpha-0.1-Windows-x64-Portable.zip
+            Syncut-Alpha-0.2-Windows-x64-Setup.exe
+            Syncut-Alpha-0.2-Windows-x64-Portable.zip
           if-no-files-found: error
           retention-days: 14
