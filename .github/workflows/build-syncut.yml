@@ -1,0 +1,174 @@
+name: Build Syncut Windows Installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'syncut-source.part*'
+      - '.github/workflows/build-syncut.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Reassemble Syncut source archive
+        shell: cmd
+        run: |
+          copy /b syncut-source.part01+syncut-source.part02+syncut-source.part03 syncut-source.zip
+
+      - name: Extract source archive
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (Test-Path source) { Remove-Item source -Recurse -Force }
+          Expand-Archive -LiteralPath syncut-source.zip -DestinationPath source -Force
+          if (-not (Test-Path 'source\Syncut-Claude-Handoff\CMakeLists.txt')) {
+            throw 'Syncut source archive did not extract correctly.'
+          }
+
+      - name: Setup MSYS2 UCRT64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            make
+            cmake
+            ninja
+            zip
+            base-devel
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-extra-cmake-modules
+            mingw-w64-ucrt-x86_64-kdenlive
+
+      - name: Configure and build Syncut
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          SRC="$GITHUB_WORKSPACE/source/Syncut-Claude-Handoff"
+          BUILD="$GITHUB_WORKSPACE/build-windows"
+          INSTALL="$GITHUB_WORKSPACE/dist/Syncut"
+
+          rm -rf "$BUILD" "$INSTALL"
+          mkdir -p "$BUILD" "$INSTALL"
+
+          cmake -S "$SRC" -B "$BUILD" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF \
+            -DCMAKE_INSTALL_PREFIX="$INSTALL"
+
+          cmake --build "$BUILD" --target kdenlive -j2
+          cmake --install "$BUILD"
+
+          EXE="$INSTALL/bin/syncut.exe"
+          if [ ! -f "$EXE" ]; then
+            echo "syncut.exe was not produced"
+            find "$INSTALL" -maxdepth 3 -type f | sort
+            exit 2
+          fi
+
+          # Deploy Qt runtime and QML modules.
+          if command -v windeployqt6 >/dev/null 2>&1; then
+            windeployqt6 --release --no-translations --qmldir "$SRC" "$EXE" || true
+          elif command -v windeployqt >/dev/null 2>&1; then
+            windeployqt --release --no-translations --qmldir "$SRC" "$EXE" || true
+          fi
+
+          # Copy direct UCRT64 DLL dependencies.
+          while IFS= read -r dll; do
+            [ -f "$dll" ] && cp -n "$dll" "$INSTALL/bin/" || true
+          done < <(ldd "$EXE" | awk '/=> \/ucrt64\// {print $3}' | sort -u)
+
+          # MLT and frei0r runtime modules/data.
+          for d in /ucrt64/lib/mlt-7 /ucrt64/share/mlt-7 /ucrt64/share/frei0r-1; do
+            if [ -d "$d" ]; then
+              rel="${d#/ucrt64/}"
+              mkdir -p "$INSTALL/$(dirname "$rel")"
+              cp -R "$d" "$INSTALL/$(dirname "$rel")/"
+            fi
+          done
+
+          cat > "$INSTALL/README.txt" <<'TXT'
+          Syncut Alpha 0.1
+          Native Windows build of the Syncut video editor.
+          Start with bin\\syncut.exe.
+          No AI model is installed automatically.
+          TXT
+
+      - name: Create portable ZIP
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Compress-Archive -Path 'dist\Syncut\*' -DestinationPath 'Syncut-Alpha-0.1-Windows-x64-Portable.zip' -Force
+
+      - name: Install NSIS
+        shell: powershell
+        run: |
+          choco install nsis -y --no-progress
+
+      - name: Create Windows installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @'
+          Unicode true
+          Name "Syncut Alpha 0.1"
+          OutFile "Syncut-Alpha-0.1-Windows-x64-Setup.exe"
+          InstallDir "$LOCALAPPDATA\Programs\Syncut"
+          RequestExecutionLevel user
+          SetCompressor /SOLID lzma
+          ShowInstDetails show
+          ShowUninstDetails show
+
+          Page directory
+          Page instfiles
+          UninstPage uninstConfirm
+          UninstPage instfiles
+
+          Section "Syncut" SEC_MAIN
+            SetOutPath "$INSTDIR"
+            File /r "dist\Syncut\*.*"
+            CreateDirectory "$SMPROGRAMS\Syncut"
+            CreateShortcut "$SMPROGRAMS\Syncut\Syncut.lnk" "$INSTDIR\bin\syncut.exe" "" "$INSTDIR\bin\syncut.exe" 0
+            CreateShortcut "$DESKTOP\Syncut.lnk" "$INSTDIR\bin\syncut.exe" "" "$INSTDIR\bin\syncut.exe" 0
+            WriteUninstaller "$INSTDIR\Uninstall.exe"
+            WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayName" "Syncut Alpha 0.1"
+            WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayVersion" "0.1"
+            WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "Publisher" "Syncut"
+            WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "InstallLocation" "$INSTDIR"
+            WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayIcon" "$INSTDIR\bin\syncut.exe"
+            WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "UninstallString" '"$INSTDIR\Uninstall.exe"'
+          SectionEnd
+
+          Section "Uninstall"
+            Delete "$DESKTOP\Syncut.lnk"
+            Delete "$SMPROGRAMS\Syncut\Syncut.lnk"
+            RMDir "$SMPROGRAMS\Syncut"
+            DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut"
+            RMDir /r "$INSTDIR"
+          SectionEnd
+          '@ | Set-Content -Encoding UTF8 installer.nsi
+
+          & "$env:ProgramFiles(x86)\NSIS\makensis.exe" installer.nsi
+          if (-not (Test-Path 'Syncut-Alpha-0.1-Windows-x64-Setup.exe')) {
+            throw 'NSIS installer was not produced.'
+          }
+
+      - name: Upload Syncut installer and portable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Syncut-Windows-Installer
+          path: |
+            Syncut-Alpha-0.1-Windows-x64-Setup.exe
+            Syncut-Alpha-0.1-Windows-x64-Portable.zip
+          if-no-files-found: error
