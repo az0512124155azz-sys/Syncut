@@ -63,7 +63,20 @@ jobs:
             mingw-w64-ucrt-x86_64-extra-cmake-modules
             mingw-w64-ucrt-x86_64-kdenlive
             mingw-w64-ucrt-x86_64-qt6-tools
+            mingw-w64-ucrt-x86_64-icoutils
             mingw-w64-ucrt-x86_64-gdb
+
+      - name: Fast Syncut source preflight
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          SRC="$GITHUB_WORKSPACE/source/Syncut-Claude-Handoff"
+          test -f "$SRC/data/icons/22-apps-syncut.png"
+          if grep -RInE '\bemit\b' "$SRC/src/syncut"; then
+            echo "ERROR: raw Qt emit keyword found while QT_NO_KEYWORDS is enabled. Use Q_EMIT."
+            exit 31
+          fi
+          echo "Syncut custom-source preflight passed."
 
       - name: Configure build and install
         shell: msys2 {0}
@@ -236,7 +249,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-Build-10-Raw-Binaries
+          name: Syncut-Build-10.2-Raw-Binaries
           path: |
             build-windows/bin/syncut.exe
             build-windows/bin/kdenlive_render.exe
@@ -312,7 +325,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-Build-10-Runtime-Diagnostics
+          name: Syncut-Build-10.2-Runtime-Diagnostics
           path: |
             syncut-smoke-out.log
             syncut-smoke-err.log
@@ -359,7 +372,7 @@ jobs:
       - name: Upload final installer
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-Windows-Installer-Build-10
+          name: Syncut-Windows-Installer-Build-10.2
           path: |
             Syncut-Alpha-0.2-Windows-x64-Setup.exe
             Syncut-Alpha-0.2-Windows-x64-Portable.zip
