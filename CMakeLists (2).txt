@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: BSD-2-Clause
-# SPDX-FileCopyrightText: Jean-Baptiste Mardelle <jb@kdenlive.org>
+# SPDX-FileCopyrightText: Nicolas Carion <french.ebook.lover@gmail.com>
 
 set(kdenlive_SRCS
   ${kdenlive_SRCS}
-#  mltcontroller/bincontroller.cpp
-#  mltcontroller/clip.cpp
-  mltcontroller/clipcontroller.cpp
-  mltcontroller/clippropertiescontroller.cpp
-#  mltcontroller/effectscontroller.cpp
+  profiles/profileinfo.cpp
+  profiles/profilerepository.cpp
+  profiles/profilemodel.cpp
+  profiles/tree/profiletreemodel.cpp
+  profiles/tree/profilefilter.cpp
   PARENT_SCOPE)
+

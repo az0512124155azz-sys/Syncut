@@ -1,5 +1,12 @@
 # SPDX-License-Identifier: BSD-2-Clause
-# SPDX-FileCopyrightText: Marco Gittler <marco@gitma.de>
+# SPDX-FileCopyrightText: Alberto Villa <avilla@FreeBSD.org>, Jean-Baptiste Mardelle <jb@kdenlive.org>
 
-FILE(GLOB files "${CMAKE_CURRENT_SOURCE_DIR}/*.kdenlivetitle")
-INSTALL (FILES ${files} DESTINATION ${KDE_INSTALL_DATADIR}${DATA_INSTALL_PREFIX}/titles)
+set(kdenlive_SRCS
+  ${kdenlive_SRCS}
+  scopes/audioscopes/abstractaudioscopewidget.cpp
+  scopes/audioscopes/audiosignal.cpp
+  scopes/audioscopes/audiospectrum.cpp
+  scopes/audioscopes/spectrogram.cpp
+  PARENT_SCOPE
+)
+
