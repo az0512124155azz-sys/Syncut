@@ -1,6 +1,6 @@
 Unicode true
-Name "Syncut Alpha 0.1"
-OutFile "Syncut-Alpha-0.1-Windows-x64-Setup.exe"
+Name "Syncut Alpha 0.2"
+OutFile "Syncut-Alpha-0.2-Windows-x64-Setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\Syncut"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
@@ -15,6 +15,12 @@ UninstPage uninstConfirm
 UninstPage instfiles
 
 Section "Syncut"
+  ; Close an older Syncut instance before replacing Qt/MLT DLL files.
+  nsExec::ExecToLog 'taskkill /F /IM syncut.exe'
+  Sleep 700
+
+  ; Remove stale runtime files from older alpha builds.
+  RMDir /r "$INSTDIR"
   SetOutPath "$INSTDIR"
   File /r "dist\Syncut\*.*"
 
@@ -30,8 +36,8 @@ Section "Syncut"
 
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayName" "Syncut Alpha 0.1"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayVersion" "0.1"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayName" "Syncut Alpha 0.2"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayVersion" "0.2"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "Publisher" "Syncut"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "UninstallString" '"$INSTDIR\Uninstall.exe"'
@@ -44,6 +50,8 @@ Section "Syncut"
 SectionEnd
 
 Section "Uninstall"
+  nsExec::ExecToLog 'taskkill /F /IM syncut.exe'
+  Sleep 500
   Delete "$DESKTOP\Syncut.lnk"
   Delete "$SMPROGRAMS\Syncut\Syncut.lnk"
   RMDir "$SMPROGRAMS\Syncut"
