@@ -3,10 +3,12 @@ name: Build Syncut Windows Installer
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
     paths:
       - 'syncut-source.part*'
       - '.github/workflows/build-syncut.yml'
+      - 'installer.nsi'
 
 permissions:
   contents: read
@@ -22,49 +24,26 @@ jobs:
 
       - name: Reassemble Syncut source archive
         shell: cmd
-        run: |
-          copy /b syncut-source.part01+syncut-source.part02+syncut-source.part03 syncut-source.zip
+        run: copy /b syncut-source.part01+syncut-source.part02+syncut-source.part03 syncut-source.zip
 
       - name: Extract and patch source archive
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-
-          if (Test-Path source) {
-            Remove-Item source -Recurse -Force
-          }
-
-          Expand-Archive `
-            -LiteralPath syncut-source.zip `
-            -DestinationPath source `
-            -Force
+          if (Test-Path source) { Remove-Item source -Recurse -Force }
+          Expand-Archive -LiteralPath syncut-source.zip -DestinationPath source -Force
 
           $src = 'source\Syncut-Claude-Handoff'
-
           if (-not (Test-Path "$src\CMakeLists.txt")) {
             throw 'Syncut source archive did not extract correctly.'
           }
 
           $meltBuilder = "$src\src\timeline2\model\builders\meltBuilder.cpp"
-
           if (Test-Path $meltBuilder) {
             $text = Get-Content -LiteralPath $meltBuilder -Raw
-
-            $fixed = $text.Replace(
-              '#include "../undohelper.hpp"',
-              '#include "undohelper.hpp"'
-            )
-
+            $fixed = $text.Replace('#include "../undohelper.hpp"', '#include "undohelper.hpp"')
             if ($fixed -ne $text) {
-              Set-Content `
-                -LiteralPath $meltBuilder `
-                -Value $fixed `
-                -Encoding UTF8
-
-              Write-Host "Patched meltBuilder.cpp"
-            }
-            else {
-              Write-Host "meltBuilder.cpp already patched"
+              Set-Content -LiteralPath $meltBuilder -Value $fixed -Encoding UTF8
             }
           }
 
@@ -93,60 +72,23 @@ jobs:
           BUILD="$GITHUB_WORKSPACE/build-windows"
           INSTALL="$GITHUB_WORKSPACE/dist/Syncut"
 
-          rm -rf "$BUILD"
-          rm -rf "$INSTALL"
+          rm -rf "$BUILD" "$INSTALL"
+          mkdir -p "$BUILD" "$INSTALL"
 
-          mkdir -p "$BUILD"
-          mkdir -p "$INSTALL"
+          cmake -S "$SRC" -B "$BUILD" -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_INSTALL_PREFIX="$INSTALL"             -DBUILD_TESTING=OFF
 
-          cmake \
-            -S "$SRC" \
-            -B "$BUILD" \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$INSTALL" \
-            -DBUILD_TESTING=OFF
-
-          echo "=== Building Syncut editor ==="
-
-          cmake \
-            --build "$BUILD" \
-            --target kdenlive \
-            -j2
-
-          echo "=== Building renderer ==="
-
-          cmake \
-            --build "$BUILD" \
-            --target kdenlive_render \
-            -j2
-
-          echo "=== Building MLT thumbnailer ==="
-
-          cmake \
-            --build "$BUILD" \
-            --target mltpreview \
-            -j2
-
-          echo "=== Verifying raw binaries ==="
+          cmake --build "$BUILD" --target kdenlive -j2
+          cmake --build "$BUILD" --target kdenlive_render -j2
+          cmake --build "$BUILD" --target mltpreview -j2
 
           test -f "$BUILD/bin/syncut.exe"
-
           test -f "$BUILD/bin/kdenlive_render.exe"
 
-          test -f "$BUILD/bin/kf6/thumbcreator/mltpreview.dll"
-
-          ls -lh "$BUILD/bin/syncut.exe"
-
-          ls -lh "$BUILD/bin/kdenlive_render.exe"
-
-          ls -lh "$BUILD/bin/kf6/thumbcreator/mltpreview.dll"
-
-      - name: Upload raw Syncut binaries
+      - name: Upload raw binaries
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-Build-6-Raw-Binaries
+          name: Syncut-Build-7-Raw-Binaries
           path: |
             build-windows/bin/syncut.exe
             build-windows/bin/kdenlive_render.exe
@@ -163,346 +105,96 @@ jobs:
           BUILD="$GITHUB_WORKSPACE/build-windows"
           INSTALL="$GITHUB_WORKSPACE/dist/Syncut"
 
-          echo "=== Installing Syncut ==="
-
           cmake --install "$BUILD"
 
-          if [ ! -f "$INSTALL/bin/syncut.exe" ]; then
-            echo "ERROR: syncut.exe missing after install"
-            exit 2
-          fi
-
-          if [ ! -f "$INSTALL/bin/kdenlive_render.exe" ]; then
-            echo "ERROR: kdenlive_render.exe missing after install"
-            exit 3
-          fi
-
-          echo "=== Deploying Qt runtime ==="
+          test -f "$INSTALL/bin/syncut.exe"
+          test -f "$INSTALL/bin/kdenlive_render.exe"
 
           if command -v windeployqt6 >/dev/null 2>&1; then
-            windeployqt6 \
-              --release \
-              --qmldir "$SRC" \
-              "$INSTALL/bin/syncut.exe" \
-              || true
+            windeployqt6 --release --qmldir "$SRC" "$INSTALL/bin/syncut.exe" || true
           elif command -v windeployqt >/dev/null 2>&1; then
-            windeployqt \
-              --release \
-              --qmldir "$SRC" \
-              "$INSTALL/bin/syncut.exe" \
-              || true
-          else
-            echo "WARNING: windeployqt not found"
+            windeployqt --release --qmldir "$SRC" "$INSTALL/bin/syncut.exe" || true
           fi
 
-          echo "=== Copying direct DLL dependencies ==="
+          while IFS= read -r dll; do
+            if [ -f "$dll" ]; then cp -n "$dll" "$INSTALL/bin/" || true; fi
+          done < <(ldd "$INSTALL/bin/syncut.exe" | awk '/=> \/ucrt64\// {print $3}' | sort -u)
 
-          while IFS= read -r dll
-          do
-            if [ -f "$dll" ]; then
-              cp -n "$dll" "$INSTALL/bin/" || true
-            fi
-          done < <(
-            ldd "$INSTALL/bin/syncut.exe" \
-            | awk '/=> \/ucrt64\// {print $3}' \
-            | sort -u
-          )
-
-          echo "=== Copying FFmpeg and MLT tools ==="
-
-          for tool in \
-            ffmpeg.exe \
-            ffprobe.exe \
-            melt-7.exe
-          do
-            if [ -f "/ucrt64/bin/$tool" ]; then
-              if [ ! -f "$INSTALL/bin/$tool" ]; then
-                cp "/ucrt64/bin/$tool" "$INSTALL/bin/"
-              fi
+          for tool in ffmpeg.exe ffprobe.exe melt-7.exe; do
+            if [ -f "/ucrt64/bin/$tool" ] && [ ! -f "$INSTALL/bin/$tool" ]; then
+              cp "/ucrt64/bin/$tool" "$INSTALL/bin/"
             fi
           done
 
-          echo "=== Copying MLT runtime data ==="
-
-          for d in \
-            /ucrt64/lib/mlt-7 \
-            /ucrt64/share/mlt-7 \
-            /ucrt64/share/frei0r-1
-          do
+          for d in /ucrt64/lib/mlt-7 /ucrt64/share/mlt-7 /ucrt64/share/frei0r-1; do
             if [ -d "$d" ]; then
               rel="${d#/ucrt64/}"
-              dest="$INSTALL/$(dirname "$rel")"
-
-              mkdir -p "$dest"
-
-              cp -R "$d" "$dest/" || true
+              mkdir -p "$INSTALL/$(dirname "$rel")"
+              cp -R "$d" "$INSTALL/$(dirname "$rel")/" || true
             fi
           done
 
-          echo "=== Copying Syncut icon ==="
-
-          ICON="$(find "$SRC" \
-            -type f \
-            \( -iname 'syncut.ico' -o -iname '*syncut*.ico' \) \
-            | head -1 \
-            || true)"
-
+          ICON="$(find "$SRC" -type f \( -iname 'syncut.ico' -o -iname '*syncut*.ico' \) | head -1 || true)"
           if [ -n "$ICON" ] && [ -f "$ICON" ]; then
             cp "$ICON" "$INSTALL/syncut.ico"
-            echo "Using icon: $ICON"
-          else
-            echo "WARNING: syncut.ico not found"
           fi
 
-          printf '%s\n' \
-            'Syncut Alpha 0.1' \
-            '' \
-            'Native Windows build of Syncut.' \
-            '' \
-            'Start with:' \
-            'bin\syncut.exe' \
-            '' \
-            'No AI model is installed automatically.' \
-            > "$INSTALL/README.txt"
-
-          echo "=== Install tree ==="
-
-          find "$INSTALL" \
-            -maxdepth 3 \
-            -type f \
-            | sort \
-            | head -300
+          printf '%s\n'             'Syncut Alpha 0.1'             ''             'Native Windows build of Syncut.'             ''             'Start with: bin\syncut.exe'             > "$INSTALL/README.txt"
 
       - name: Verify packaged runtime
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-
-          $root = Join-Path `
-            $env:GITHUB_WORKSPACE `
-            'dist\Syncut'
-
-          $bin = Join-Path `
-            $root `
-            'bin'
-
-          $exe = Join-Path `
-            $bin `
-            'syncut.exe'
-
-          $renderer = Join-Path `
-            $bin `
-            'kdenlive_render.exe'
-
-          if (-not (Test-Path $exe)) {
-            throw 'syncut.exe missing'
-          }
-
-          if (-not (Test-Path $renderer)) {
-            throw 'kdenlive_render.exe missing'
-          }
-
-          $dllCount = (
-            Get-ChildItem `
-              -Path $bin `
-              -Filter '*.dll' `
-              -File `
-              -ErrorAction SilentlyContinue
-          ).Count
-
-          Write-Host "DLL count: $dllCount"
-
-          if ($dllCount -lt 10) {
-            Write-Warning 'Very few DLLs were packaged'
-          }
-
-          $platformCandidates = @(
-            (Join-Path $bin 'platforms\qwindows.dll'),
-            (Join-Path $root 'plugins\platforms\qwindows.dll'),
-            (Join-Path $root 'lib\qt6\plugins\platforms\qwindows.dll')
-          )
-
-          $platformFound = $false
-
-          foreach ($candidate in $platformCandidates) {
-            if (Test-Path $candidate) {
-              Write-Host "Qt platform plugin found: $candidate"
-              $platformFound = $true
-              break
-            }
-          }
-
-          if (-not $platformFound) {
-            Write-Warning 'qwindows.dll not found in common locations'
-          }
+          $root = Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut'
+          $bin = Join-Path $root 'bin'
+          if (-not (Test-Path (Join-Path $bin 'syncut.exe'))) { throw 'syncut.exe missing' }
+          if (-not (Test-Path (Join-Path $bin 'kdenlive_render.exe'))) { throw 'kdenlive_render.exe missing' }
 
       - name: Create portable ZIP
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-
-          Compress-Archive `
-            -Path 'dist\Syncut\*' `
-            -DestinationPath 'Syncut-Alpha-0.1-Windows-x64-Portable.zip' `
-            -Force
+          Compress-Archive -Path 'dist\Syncut\*' -DestinationPath 'Syncut-Alpha-0.1-Windows-x64-Portable.zip' -Force
 
       - name: Install NSIS
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-
           choco install nsis -y --no-progress
 
           $candidates = @(
             "$env:ProgramFiles\NSIS\makensis.exe",
             "${env:ProgramFiles(x86)}\NSIS\makensis.exe",
-            "C:\ProgramData\chocolatey\bin\makensis.exe"
+            'C:\ProgramData\chocolatey\bin\makensis.exe'
           )
 
-          $makensis = $null
-
-          foreach ($candidate in $candidates) {
-            if ($candidate -and (Test-Path $candidate)) {
-              $makensis = $candidate
-              break
-            }
-          }
+          $makensis = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 
           if (-not $makensis) {
-            $cmd = Get-Command `
-              makensis.exe `
-              -ErrorAction SilentlyContinue
-
-            if ($cmd) {
-              $makensis = $cmd.Source
-            }
+            $cmd = Get-Command makensis.exe -ErrorAction SilentlyContinue
+            if ($cmd) { $makensis = $cmd.Source }
           }
 
-          if (-not $makensis) {
-            throw 'makensis.exe not found'
-          }
+          if (-not $makensis) { throw 'makensis.exe not found' }
 
-          "MAKENSIS=$makensis" |
-            Out-File `
-              -FilePath $env:GITHUB_ENV `
-              -Encoding utf8 `
-              -Append
-
-          Write-Host "NSIS found at: $makensis"
+          "MAKENSIS=$makensis" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Create Windows installer
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-
-          $hasIcon = Test-Path 'dist\Syncut\syncut.ico'
-
-          if ($hasIcon) {
-            $installerIconLine = 'Icon "dist\Syncut\syncut.ico"'
-
-            $startShortcut = 'CreateShortcut "$SMPROGRAMS\Syncut\Syncut.lnk" "$INSTDIR\bin\syncut.exe" "" "$INSTDIR\syncut.ico" 0'
-
-            $desktopShortcut = 'CreateShortcut "$DESKTOP\Syncut.lnk" "$INSTDIR\bin\syncut.exe" "" "$INSTDIR\syncut.ico" 0'
-
-            $displayIcon = 'WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayIcon" "$INSTDIR\syncut.ico"'
-          }
-          else {
-            $installerIconLine = ''
-
-            $startShortcut = 'CreateShortcut "$SMPROGRAMS\Syncut\Syncut.lnk" "$INSTDIR\bin\syncut.exe" "" "$INSTDIR\bin\syncut.exe" 0'
-
-            $desktopShortcut = 'CreateShortcut "$DESKTOP\Syncut.lnk" "$INSTDIR\bin\syncut.exe" "" "$INSTDIR\bin\syncut.exe" 0'
-
-            $displayIcon = 'WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayIcon" "$INSTDIR\bin\syncut.exe"'
-          }
-
-          $nsi = @"
-Unicode true
-
-Name "Syncut Alpha 0.1"
-
-OutFile "Syncut-Alpha-0.1-Windows-x64-Setup.exe"
-
-$installerIconLine
-
-InstallDir "`$LOCALAPPDATA\Programs\Syncut"
-
-RequestExecutionLevel user
-
-SetCompressor /SOLID lzma
-
-Page directory
-Page instfiles
-
-UninstPage uninstConfirm
-UninstPage instfiles
-
-Section "Syncut"
-
-  SetOutPath "`$INSTDIR"
-
-  File /r "dist\Syncut\*.*"
-
-  CreateDirectory "`$SMPROGRAMS\Syncut"
-
-  $startShortcut
-
-  $desktopShortcut
-
-  WriteUninstaller "`$INSTDIR\Uninstall.exe"
-
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayName" "Syncut Alpha 0.1"
-
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayVersion" "0.1"
-
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "Publisher" "Syncut"
-
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "InstallLocation" "`$INSTDIR"
-
-  $displayIcon
-
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "UninstallString" '"`$INSTDIR\Uninstall.exe"'
-
-SectionEnd
-
-Section "Uninstall"
-
-  Delete "`$DESKTOP\Syncut.lnk"
-
-  Delete "`$SMPROGRAMS\Syncut\Syncut.lnk"
-
-  RMDir "`$SMPROGRAMS\Syncut"
-
-  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut"
-
-  RMDir /r "`$INSTDIR"
-
-SectionEnd
-"@
-
-          $nsi |
-            Set-Content `
-              -LiteralPath installer.nsi `
-              -Encoding ascii
-
-          if (-not $env:MAKENSIS) {
-            throw 'MAKENSIS path missing'
-          }
+          if (-not (Test-Path 'installer.nsi')) { throw 'installer.nsi missing from repository root' }
+          if (-not $env:MAKENSIS) { throw 'MAKENSIS path missing' }
 
           & $env:MAKENSIS installer.nsi
 
-          if ($LASTEXITCODE -ne 0) {
-            throw "makensis failed with exit code $LASTEXITCODE"
-          }
-
-          if (-not (Test-Path 'Syncut-Alpha-0.1-Windows-x64-Setup.exe')) {
-            throw 'Installer was not produced'
-          }
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
+          if (-not (Test-Path 'Syncut-Alpha-0.1-Windows-x64-Setup.exe')) { throw 'Installer was not produced' }
 
       - name: Upload final Syncut installer
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-Windows-Installer-Build-6
+          name: Syncut-Windows-Installer-Build-7
           path: |
             Syncut-Alpha-0.1-Windows-x64-Setup.exe
             Syncut-Alpha-0.1-Windows-x64-Portable.zip
@@ -513,7 +205,7 @@ SectionEnd
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-Build-6-Diagnostics
+          name: Syncut-Build-7-Diagnostics
           path: |
             installer.nsi
             dist/Syncut/**
