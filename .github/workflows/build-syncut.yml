@@ -1,4 +1,4 @@
-name: Build Syncut Windows Installer
+name: Build Syncut Windows - Hardened Validation
 
 on:
   workflow_dispatch:
@@ -15,37 +15,87 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
-    timeout-minutes: 180
+    timeout-minutes: 210
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Reassemble Syncut source
-        shell: cmd
-        run: copy /b syncut-source.part01+syncut-source.part02+syncut-source.part03 syncut-source.zip
-
-      - name: Extract source
+      - name: Verify source parts and reconstruct archive
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          if (Test-Path source) { Remove-Item source -Recurse -Force }
-          Expand-Archive -LiteralPath syncut-source.zip -DestinationPath source -Force
+          $parts = @('syncut-source.part01','syncut-source.part02','syncut-source.part03')
+          foreach ($part in $parts) {
+            if (-not (Test-Path $part)) { throw "Missing $part" }
+            $size = (Get-Item $part).Length
+            if ($size -lt 1000000) { throw "$part is unexpectedly small: $size bytes" }
+            Write-Host "$part = $size bytes"
+          }
+          cmd /c copy /b syncut-source.part01+syncut-source.part02+syncut-source.part03 syncut-source.zip
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to reconstruct syncut-source.zip' }
+          if (-not (Test-Path syncut-source.zip)) { throw 'syncut-source.zip was not created' }
 
-          $src = 'source\Syncut-Claude-Handoff'
-          if (-not (Test-Path "$src\CMakeLists.txt")) {
-            throw 'Syncut source archive did not extract correctly.'
+      - name: Validate and extract source archive
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path 'syncut-source.zip'))
+          try {
+            if ($zip.Entries.Count -lt 1000) { throw "Source archive has too few entries: $($zip.Entries.Count)" }
+            if (-not ($zip.Entries.FullName -contains 'Syncut-Claude-Handoff/CMakeLists.txt')) {
+              throw 'Root CMakeLists.txt is missing from source archive'
+            }
+            if (-not ($zip.Entries.FullName -contains 'Syncut-Claude-Handoff/src/syncut/aiassistantwidget.cpp')) {
+              throw 'Syncut local AI source is missing from source archive'
+            }
+          } finally {
+            $zip.Dispose()
           }
 
-          # Keep compatibility with the old source snapshot if this include ever reappears.
+          if (Test-Path source) { Remove-Item source -Recurse -Force }
+          Expand-Archive -LiteralPath syncut-source.zip -DestinationPath source -Force
+          $src = 'source\Syncut-Claude-Handoff'
+          if (-not (Test-Path "$src\CMakeLists.txt")) { throw 'Source extraction failed' }
+
           $meltBuilder = "$src\src\timeline2\model\builders\meltBuilder.cpp"
           if (Test-Path $meltBuilder) {
             $text = Get-Content -LiteralPath $meltBuilder -Raw
             $fixed = $text.Replace('#include "../undohelper.hpp"', '#include "undohelper.hpp"')
-            if ($fixed -ne $text) {
-              Set-Content -LiteralPath $meltBuilder -Value $fixed -Encoding UTF8
-            }
+            if ($fixed -ne $text) { Set-Content -LiteralPath $meltBuilder -Value $fixed -Encoding UTF8 }
           }
+
+      - name: Static safety checks before the long build
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $src = 'source\Syncut-Claude-Handoff'
+          $ai = "$src\src\syncut"
+
+          $required = @(
+            "$ai\aiassistantwidget.cpp",
+            "$ai\aiassistantwidget.h",
+            "$src\data\icons\22-apps-syncut.png"
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path $file)) { throw "Required file missing: $file" }
+          }
+
+          $allAi = Get-ChildItem $ai -File -Recurse | Get-Content -Raw
+          if ($allAi -match '\bemit\b') { throw 'Raw Qt emit keyword found. QT_NO_KEYWORDS requires Q_EMIT.' }
+          if ($allAi -match 'generativelanguage|api\.openai|api\.nvidia|Gemini') { throw 'Cloud AI/API code found in local-only Syncut AI.' }
+          if ($allAi -match 'https?://(?!127\.0\.0\.1|localhost)') { throw 'Non-local HTTP endpoint found in Syncut AI.' }
+
+          $cpp = Get-Content "$ai\aiassistantwidget.cpp" -Raw
+          if ($cpp -match 'QJsonObject\s*\{\{[^\r\n]*\+') {
+            throw 'Risky QStringBuilder expression inside QJsonObject initializer found.'
+          }
+          if ($cpp -notmatch '127\.0\.0\.1:11434') { throw 'Ollama localhost detection is missing.' }
+          if ($cpp -notmatch '127\.0\.0\.1:1234') { throw 'Bionic/LM Studio localhost detection is missing.' }
+          if ($cpp -notmatch 'return true;') { throw 'Built-in local fallback availability check is missing.' }
+
+          Write-Host 'Static Syncut/AI safety checks passed.'
 
       - name: Setup MSYS2 UCRT64
         uses: msys2/setup-msys2@v2
@@ -66,27 +116,13 @@ jobs:
             mingw-w64-ucrt-x86_64-icoutils
             mingw-w64-ucrt-x86_64-gdb
 
-      - name: Fast Syncut source preflight
+      - name: Configure CMake
         shell: msys2 {0}
         run: |
           set -euo pipefail
-          SRC="$GITHUB_WORKSPACE/source/Syncut-Claude-Handoff"
-          test -f "$SRC/data/icons/22-apps-syncut.png"
-          if grep -RInE '\bemit\b' "$SRC/src/syncut"; then
-            echo "ERROR: raw Qt emit keyword found while QT_NO_KEYWORDS is enabled. Use Q_EMIT."
-            exit 31
-          fi
-          echo "Syncut custom-source preflight passed."
-
-      - name: Configure build and install
-        shell: msys2 {0}
-        run: |
-          set -euo pipefail
-
           SRC="$GITHUB_WORKSPACE/source/Syncut-Claude-Handoff"
           BUILD="$GITHUB_WORKSPACE/build-windows"
           INSTALL="$GITHUB_WORKSPACE/dist/Syncut"
-
           rm -rf "$BUILD" "$INSTALL"
           mkdir -p "$BUILD" "$INSTALL"
 
@@ -95,11 +131,33 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$INSTALL" \
             -DBUILD_TESTING=OFF
 
+          test -f "$BUILD/build.ninja"
+
+      - name: Compile Syncut editor
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          BUILD="$GITHUB_WORKSPACE/build-windows"
           cmake --build "$BUILD" --target kdenlive -j2
+          test -f "$BUILD/bin/syncut.exe"
+
+      - name: Compile renderer and thumbnail plugin
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          BUILD="$GITHUB_WORKSPACE/build-windows"
           cmake --build "$BUILD" --target kdenlive_render -j2
           cmake --build "$BUILD" --target mltpreview -j2
-          cmake --install "$BUILD"
+          test -f "$BUILD/bin/kdenlive_render.exe"
+          test -n "$(find "$BUILD" -type f -iname 'mltpreview.dll' | head -1)"
 
+      - name: Install compiled application
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          BUILD="$GITHUB_WORKSPACE/build-windows"
+          INSTALL="$GITHUB_WORKSPACE/dist/Syncut"
+          cmake --install "$BUILD"
           test -f "$INSTALL/bin/syncut.exe"
           test -f "$INSTALL/bin/kdenlive_render.exe"
 
@@ -107,23 +165,14 @@ jobs:
         shell: msys2 {0}
         run: |
           set -euo pipefail
-
           SRC="$GITHUB_WORKSPACE/source/Syncut-Claude-Handoff"
           INSTALL="$GITHUB_WORKSPACE/dist/Syncut"
 
           DEPLOY=""
           for x in windeployqt6.exe windeployqt6 windeployqt.exe windeployqt; do
-            if command -v "$x" >/dev/null 2>&1; then
-              DEPLOY="$(command -v "$x")"
-              break
-            fi
+            if command -v "$x" >/dev/null 2>&1; then DEPLOY="$(command -v "$x")"; break; fi
           done
-
-          if [ -z "$DEPLOY" ]; then
-            echo "ERROR: windeployqt was not found"
-            exit 20
-          fi
-
+          [ -n "$DEPLOY" ] || { echo 'ERROR: windeployqt not found'; exit 20; }
           "$DEPLOY" --release --qmldir "$SRC" "$INSTALL/bin/syncut.exe"
 
           QMLROOT=""
@@ -132,31 +181,15 @@ jobs:
           elif command -v qtpaths6 >/dev/null 2>&1; then
             QMLROOT="$(qtpaths6 --query QT_INSTALL_QML 2>/dev/null | tr -d '\r' || true)"
           fi
-
           if [ -z "$QMLROOT" ] || [ ! -d "$QMLROOT" ]; then
             for candidate in /ucrt64/share/qt6/qml /ucrt64/lib/qt6/qml /ucrt64/qml; do
-              if [ -d "$candidate" ]; then
-                QMLROOT="$candidate"
-                break
-              fi
+              if [ -d "$candidate" ]; then QMLROOT="$candidate"; break; fi
             done
           fi
-
-          if [ -z "$QMLROOT" ] || [ ! -d "$QMLROOT" ]; then
-            echo "ERROR: Qt QML import tree was not found"
-            exit 21
-          fi
-
+          [ -n "$QMLROOT" ] && [ -d "$QMLROOT" ] || { echo 'ERROR: Qt QML tree missing'; exit 21; }
           mkdir -p "$INSTALL/bin/qml"
           cp -R "$QMLROOT"/. "$INSTALL/bin/qml/"
 
-          CONTROLS_PLUGIN="$(find "$INSTALL/bin/qml" -type f -iname 'qtquickcontrols2plugin.dll' | head -1 || true)"
-          if [ -z "$CONTROLS_PLUGIN" ]; then
-            echo "ERROR: qtquickcontrols2plugin.dll is missing"
-            exit 22
-          fi
-
-          # Copy recursive DLL dependencies for every packaged EXE/DLL/QML plugin.
           for pass in 1 2 3 4 5 6; do
             copied=0
             while IFS= read -r f; do
@@ -172,51 +205,23 @@ jobs:
             [ "$copied" -eq 0 ] && break
           done
 
-          # MLT melt renderer. Windows Kdenlive/Syncut expects melt.exe.
           MELT_SRC=""
-          for candidate in \
-            /ucrt64/bin/melt.exe \
-            /ucrt64/bin/melt-7.exe \
-            /ucrt64/bin/mlt-melt.exe
-          do
-            if [ -f "$candidate" ]; then
-              MELT_SRC="$candidate"
-              break
-            fi
+          for candidate in /ucrt64/bin/melt.exe /ucrt64/bin/melt-7.exe /ucrt64/bin/mlt-melt.exe; do
+            if [ -f "$candidate" ]; then MELT_SRC="$candidate"; break; fi
           done
-
           if [ -z "$MELT_SRC" ]; then
             MELT_SRC="$(find /ucrt64 -type f \( -iname 'melt.exe' -o -iname 'melt-7.exe' -o -iname 'mlt-melt.exe' \) | head -1 || true)"
           fi
-
-          if [ -z "$MELT_SRC" ] || [ ! -f "$MELT_SRC" ]; then
-            echo "ERROR: MLT melt executable was not found"
-            exit 23
-          fi
-
-          echo "Using MLT renderer: $MELT_SRC"
+          [ -n "$MELT_SRC" ] && [ -f "$MELT_SRC" ] || { echo 'ERROR: MLT melt missing'; exit 23; }
           cp -f "$MELT_SRC" "$INSTALL/bin/melt.exe"
           cp -f "$MELT_SRC" "$INSTALL/bin/melt-7.exe"
 
           for tool in ffmpeg.exe ffprobe.exe; do
-            if [ -f "/ucrt64/bin/$tool" ]; then
-              cp -f "/ucrt64/bin/$tool" "$INSTALL/bin/"
-            else
-              echo "ERROR: $tool is missing"
-              exit 24
-            fi
+            [ -f "/ucrt64/bin/$tool" ] || { echo "ERROR: $tool missing"; exit 24; }
+            cp -f "/ucrt64/bin/$tool" "$INSTALL/bin/"
           done
 
-          for d in \
-            /ucrt64/lib/mlt-7 \
-            /ucrt64/share/mlt-7 \
-            /ucrt64/share/mlt \
-            /ucrt64/share/frei0r-1 \
-            /ucrt64/share/kdenlive \
-            /ucrt64/share/kxmlgui6 \
-            /ucrt64/share/mime \
-            /ucrt64/share/icons
-          do
+          for d in /ucrt64/lib/mlt-7 /ucrt64/share/mlt-7 /ucrt64/share/mlt /ucrt64/share/frei0r-1 /ucrt64/share/kdenlive /ucrt64/share/kxmlgui6 /ucrt64/share/mime /ucrt64/share/icons; do
             if [ -d "$d" ]; then
               rel="${d#/ucrt64/}"
               mkdir -p "$INSTALL/$(dirname "$rel")"
@@ -225,83 +230,162 @@ jobs:
           done
 
           ICON="$SRC/data/icons/syncut.ico"
-          if [ -f "$ICON" ]; then
-            cp -f "$ICON" "$INSTALL/syncut.ico"
-          fi
+          [ -f "$ICON" ] && cp -f "$ICON" "$INSTALL/syncut.ico"
 
-          printf '%s\n' \
-            '[Paths]' \
-            'Prefix=.' \
-            'Plugins=.' \
-            'Qml2Imports=qml' \
-            'QmlImports=qml' \
-            'Translations=translations' \
-            > "$INSTALL/bin/qt.conf"
+          printf '%s\n' '[Paths]' 'Prefix=.' 'Plugins=.' 'Qml2Imports=qml' 'QmlImports=qml' 'Translations=translations' > "$INSTALL/bin/qt.conf"
 
-          test -f "$INSTALL/bin/platforms/qwindows.dll"
-          test -f "$INSTALL/bin/melt.exe"
-          test -f "$INSTALL/bin/ffmpeg.exe"
-          test -f "$INSTALL/bin/ffprobe.exe"
-          test -f "$INSTALL/bin/qt.conf"
-          test -n "$(find "$INSTALL/bin/qml" -type f -iname 'qtquickcontrols2plugin.dll' | head -1)"
-
-      - name: Upload raw binaries
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Syncut-Build-10.2-Raw-Binaries
-          path: |
-            build-windows/bin/syncut.exe
-            build-windows/bin/kdenlive_render.exe
-            build-windows/bin/kf6/thumbcreator/mltpreview.dll
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Smoke test packaged Syncut
-        id: smoke
+      - name: Validate packaged runtime files
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut'
+          $bin = Join-Path $root 'bin'
+          $required = @(
+            'syncut.exe','kdenlive_render.exe','melt.exe','melt-7.exe','ffmpeg.exe','ffprobe.exe','qt.conf',
+            'platforms\qwindows.dll','Qt6Core.dll','Qt6Gui.dll','Qt6Widgets.dll','Qt6Network.dll'
+          )
+          foreach ($rel in $required) {
+            $p = Join-Path $bin $rel
+            if (-not (Test-Path $p)) { throw "Packaged runtime file missing: $rel" }
+          }
+          $controls = Get-ChildItem (Join-Path $bin 'qml') -Filter qtquickcontrols2plugin.dll -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $controls) { throw 'qtquickcontrols2plugin.dll missing from packaged QML tree' }
+          Write-Host "QtQuick Controls plugin: $($controls.FullName)"
 
+      - name: Validate FFmpeg and MLT executables
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bin = Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut\bin'
+          $oldPath = $env:PATH
+          $env:PATH = "$bin;$env:SystemRoot\System32;$env:SystemRoot"
+          try {
+            & (Join-Path $bin 'ffmpeg.exe') -version | Select-Object -First 3
+            if ($LASTEXITCODE -ne 0) { throw 'Packaged ffmpeg.exe failed to start' }
+            & (Join-Path $bin 'ffprobe.exe') -version | Select-Object -First 3
+            if ($LASTEXITCODE -ne 0) { throw 'Packaged ffprobe.exe failed to start' }
+            & (Join-Path $bin 'melt.exe') -version | Select-Object -First 8
+            if ($LASTEXITCODE -ne 0) { throw 'Packaged melt.exe failed to start' }
+          } finally {
+            $env:PATH = $oldPath
+          }
+
+      - name: Smoke test portable package with NO optional AI runtime
+        id: portable_smoke
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
           $root = Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut'
           $bin = Join-Path $root 'bin'
           $exe = Join-Path $bin 'syncut.exe'
-          $melt = Join-Path $bin 'melt.exe'
-
-          if (-not (Test-Path $exe)) { throw 'syncut.exe missing.' }
-          if (-not (Test-Path $melt)) { throw 'melt.exe missing.' }
-
-          $clean = Join-Path $env:RUNNER_TEMP 'syncut-clean-profile'
+          $clean = Join-Path $env:RUNNER_TEMP 'syncut-clean-profile-no-ai'
+          if (Test-Path $clean) { Remove-Item $clean -Recurse -Force }
           New-Item -ItemType Directory -Force -Path $clean | Out-Null
 
           $env:XDG_CONFIG_HOME = Join-Path $clean 'config'
           $env:XDG_CACHE_HOME = Join-Path $clean 'cache'
           $env:XDG_DATA_HOME = Join-Path $clean 'data'
-          $env:QT_DEBUG_PLUGINS = '1'
-          $env:QML_IMPORT_TRACE = '1'
           $env:QML2_IMPORT_PATH = Join-Path $bin 'qml'
           $env:QML_IMPORT_PATH = Join-Path $bin 'qml'
           $env:MLT_PREFIX = $root
-          $env:PATH = "$bin;$env:PATH"
+          $env:PATH = "$bin;$env:SystemRoot\System32;$env:SystemRoot"
 
-          $stdout = Join-Path $env:GITHUB_WORKSPACE 'syncut-smoke-out.log'
-          $stderr = Join-Path $env:GITHUB_WORKSPACE 'syncut-smoke-err.log'
-
+          $stdout = Join-Path $env:GITHUB_WORKSPACE 'syncut-portable-out.log'
+          $stderr = Join-Path $env:GITHUB_WORKSPACE 'syncut-portable-err.log'
           $p = Start-Process -FilePath $exe -WorkingDirectory $bin -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-          Start-Sleep -Seconds 30
-
+          Start-Sleep -Seconds 45
           if ($p.HasExited) {
-            Write-Host "Syncut exited during smoke test. Exit code: $($p.ExitCode)"
-            if (Test-Path $stdout) { Get-Content $stdout -Tail 300 }
-            if (Test-Path $stderr) { Get-Content $stderr -Tail 700 }
-            throw "Syncut runtime smoke test failed with exit code $($p.ExitCode)"
+            Write-Host "Syncut exited. Code: $($p.ExitCode)"
+            if (Test-Path $stdout) { Get-Content $stdout -Tail 400 }
+            if (Test-Path $stderr) { Get-Content $stderr -Tail 800 }
+            throw "Portable Syncut smoke test failed: $($p.ExitCode)"
           }
-
-          Write-Host 'Syncut stayed alive for 30 seconds. Runtime smoke test passed.'
+          Write-Host 'Portable Syncut survived 45 seconds with no Ollama/Bionic service present.'
           Stop-Process -Id $p.Id -Force
 
-      - name: Capture crash backtrace
-        if: failure() && steps.smoke.outcome == 'failure'
+      - name: Create portable ZIP
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Compress-Archive -Path 'dist\Syncut\*' -DestinationPath 'Syncut-Alpha-0.3-Windows-x64-Portable.zip' -Force
+          if (-not (Test-Path 'Syncut-Alpha-0.3-Windows-x64-Portable.zip')) { throw 'Portable ZIP was not created' }
+          if ((Get-Item 'Syncut-Alpha-0.3-Windows-x64-Portable.zip').Length -lt 10000000) { throw 'Portable ZIP is unexpectedly small' }
+
+      - name: Install NSIS
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install nsis -y --no-progress
+          $candidates = @(
+            "$env:ProgramFiles\NSIS\makensis.exe",
+            "${env:ProgramFiles(x86)}\NSIS\makensis.exe",
+            'C:\ProgramData\chocolatey\bin\makensis.exe'
+          )
+          $makensis = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+          if (-not $makensis) {
+            $cmd = Get-Command makensis.exe -ErrorAction SilentlyContinue
+            if ($cmd) { $makensis = $cmd.Source }
+          }
+          if (-not $makensis) { throw 'makensis.exe not found' }
+          "MAKENSIS=$makensis" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Create Windows installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path 'installer.nsi')) { throw 'installer.nsi missing' }
+          & $env:MAKENSIS installer.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed: $LASTEXITCODE" }
+          if (-not (Test-Path 'Syncut-Alpha-0.3-Windows-x64-Setup.exe')) { throw 'Installer was not produced' }
+
+      - name: Silent-install the REAL installer on a clean runner
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Resolve-Path 'Syncut-Alpha-0.3-Windows-x64-Setup.exe'
+          $existing = Join-Path $env:LOCALAPPDATA 'Programs\Syncut'
+          if (Test-Path $existing) { Remove-Item $existing -Recurse -Force }
+          $p = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Silent installer failed: $($p.ExitCode)" }
+          $installedExe = Join-Path $existing 'bin\syncut.exe'
+          if (-not (Test-Path $installedExe)) { throw 'Installed syncut.exe is missing' }
+          foreach ($rel in @('bin\melt.exe','bin\ffmpeg.exe','bin\platforms\qwindows.dll')) {
+            if (-not (Test-Path (Join-Path $existing $rel))) { throw "Installed runtime missing: $rel" }
+          }
+
+      - name: Smoke test the INSTALLED application
+        id: installed_smoke
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:LOCALAPPDATA 'Programs\Syncut'
+          $bin = Join-Path $root 'bin'
+          $exe = Join-Path $bin 'syncut.exe'
+          $clean = Join-Path $env:RUNNER_TEMP 'syncut-clean-installed'
+          if (Test-Path $clean) { Remove-Item $clean -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $clean | Out-Null
+          $env:XDG_CONFIG_HOME = Join-Path $clean 'config'
+          $env:XDG_CACHE_HOME = Join-Path $clean 'cache'
+          $env:XDG_DATA_HOME = Join-Path $clean 'data'
+          $env:QML2_IMPORT_PATH = Join-Path $bin 'qml'
+          $env:QML_IMPORT_PATH = Join-Path $bin 'qml'
+          $env:MLT_PREFIX = $root
+          $env:PATH = "$bin;$env:SystemRoot\System32;$env:SystemRoot"
+          $stdout = Join-Path $env:GITHUB_WORKSPACE 'syncut-installed-out.log'
+          $stderr = Join-Path $env:GITHUB_WORKSPACE 'syncut-installed-err.log'
+          $p = Start-Process -FilePath $exe -WorkingDirectory $bin -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          Start-Sleep -Seconds 60
+          if ($p.HasExited) {
+            Write-Host "Installed Syncut exited. Code: $($p.ExitCode)"
+            if (Test-Path $stdout) { Get-Content $stdout -Tail 400 }
+            if (Test-Path $stderr) { Get-Content $stderr -Tail 800 }
+            throw "Installed Syncut smoke test failed: $($p.ExitCode)"
+          }
+          Write-Host 'Installed Syncut survived 60 seconds with a clean PATH and clean profile.'
+          Stop-Process -Id $p.Id -Force
+
+      - name: Capture crash backtrace if a smoke test fails
+        if: failure() && (steps.portable_smoke.outcome == 'failure' || steps.installed_smoke.outcome == 'failure')
         continue-on-error: true
         shell: msys2 {0}
         run: |
@@ -309,72 +393,42 @@ jobs:
           cd "$INSTALL/bin"
           export PATH="$INSTALL/bin:/ucrt64/bin:$PATH"
           export MLT_PREFIX="$INSTALL"
-          export QT_DEBUG_PLUGINS=1
-          export QML_IMPORT_TRACE=1
           export QML2_IMPORT_PATH="$INSTALL/bin/qml"
           export QML_IMPORT_PATH="$INSTALL/bin/qml"
+          timeout 60s gdb -batch -ex 'set pagination off' -ex run -ex 'thread apply all bt full' --args "$INSTALL/bin/syncut.exe" > "$GITHUB_WORKSPACE/syncut-gdb.txt" 2>&1 || true
 
-          timeout 60s gdb -batch \
-            -ex "set pagination off" \
-            -ex "run" \
-            -ex "thread apply all bt full" \
-            --args "$INSTALL/bin/syncut.exe" \
-            > "$GITHUB_WORKSPACE/syncut-gdb.txt" 2>&1 || true
-
-      - name: Upload runtime diagnostics
+      - name: Upload diagnostics always
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-Build-10.2-Runtime-Diagnostics
+          name: Syncut-v10.7-Diagnostics
           path: |
-            syncut-smoke-out.log
-            syncut-smoke-err.log
+            syncut-portable-out.log
+            syncut-portable-err.log
+            syncut-installed-out.log
+            syncut-installed-err.log
             syncut-gdb.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload raw binaries always
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Syncut-v10.7-Raw-Binaries
+          path: |
+            build-windows/bin/syncut.exe
+            build-windows/bin/kdenlive_render.exe
+            build-windows/**/mltpreview.dll
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Create portable ZIP
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Compress-Archive -Path 'dist\Syncut\*' -DestinationPath 'Syncut-Alpha-0.2-Windows-x64-Portable.zip' -Force
-
-      - name: Install NSIS
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          choco install nsis -y --no-progress
-
-          $candidates = @(
-            "$env:ProgramFiles\NSIS\makensis.exe",
-            "${env:ProgramFiles(x86)}\NSIS\makensis.exe",
-            'C:\ProgramData\chocolatey\bin\makensis.exe'
-          )
-
-          $makensis = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
-          if (-not $makensis) {
-            $cmd = Get-Command makensis.exe -ErrorAction SilentlyContinue
-            if ($cmd) { $makensis = $cmd.Source }
-          }
-          if (-not $makensis) { throw 'makensis.exe not found.' }
-
-          "MAKENSIS=$makensis" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Create Windows installer
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not (Test-Path 'installer.nsi')) { throw 'installer.nsi missing.' }
-          & $env:MAKENSIS installer.nsi
-          if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
-          if (-not (Test-Path 'Syncut-Alpha-0.2-Windows-x64-Setup.exe')) { throw 'Installer was not produced.' }
-
-      - name: Upload final installer
+      - name: Upload final validated packages
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-Windows-Installer-Build-10.2
+          name: Syncut-v10.7-VALIDATED-Windows
           path: |
-            Syncut-Alpha-0.2-Windows-x64-Setup.exe
-            Syncut-Alpha-0.2-Windows-x64-Portable.zip
+            Syncut-Alpha-0.3-Windows-x64-Setup.exe
+            Syncut-Alpha-0.3-Windows-x64-Portable.zip
           if-no-files-found: error
           retention-days: 14
