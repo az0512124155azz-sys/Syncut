@@ -268,7 +268,8 @@ jobs:
 
           echo 'All REQUIRED Syncut runtime dependencies resolved.' | tee -a "$REPORT"
 
-      - name: Test portable KIO file protocol directly        shell: powershell
+      - name: Test portable KIO file protocol directly
+        shell: powershell
         run: |
           & '.\.github\scripts\v10.10\test-kio-probe.ps1' `
             -Root (Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut') `
