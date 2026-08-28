@@ -1,4 +1,4 @@
-name: Build Syncut Windows - v10.9 KIO Runtime Validation
+name: Build Syncut Windows - v10.10 KIO Runtime Validation
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
     paths:
       - 'syncut-source.part*'
       - '.github/workflows/build-syncut.yml'
-      - '.github/scripts/v10.9/**'
+      - '.github/scripts/v10.10/**'
       - 'installer.nsi'
 
 permissions:
@@ -26,13 +26,13 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          Get-ChildItem '.github\scripts\v10.9' -Filter '*.ps1' -File | ForEach-Object {
+          Get-ChildItem '.github\scripts\v10.10' -Filter '*.ps1' -File | ForEach-Object {
             $null = [scriptblock]::Create((Get-Content -LiteralPath $_.FullName -Raw))
             Write-Host "PowerShell syntax OK: $($_.Name)"
           }
-          & 'C:\Program Files\Git\bin\bash.exe' -n '.github/scripts/v10.9/build-kio-probe.sh'
+          & 'C:\Program Files\Git\bin\bash.exe' -n '.github/scripts/v10.10/build-kio-probe.sh'
           if ($LASTEXITCODE -ne 0) { throw 'build-kio-probe.sh has invalid shell syntax.' }
-          & 'C:\Program Files\Git\bin\bash.exe' -n '.github/scripts/v10.9/deploy-runtime.sh'
+          & 'C:\Program Files\Git\bin\bash.exe' -n '.github/scripts/v10.10/deploy-runtime.sh'
           if ($LASTEXITCODE -ne 0) { throw 'deploy-runtime.sh has invalid shell syntax.' }
 
       - name: Verify source parts and reconstruct archive
@@ -55,7 +55,7 @@ jobs:
       - name: Validate source and apply deterministic fixes
         shell: powershell
         run: |
-          & '.\.github\scripts\v10.9\validate-source.ps1' -Archive 'syncut-source.zip' -Destination 'source'
+          & '.\.github\scripts\v10.10\validate-source.ps1' -Archive 'syncut-source.zip' -Destination 'source'
 
       - name: Setup MSYS2 UCRT64
         uses: msys2/setup-msys2@v2
@@ -142,12 +142,12 @@ jobs:
       - name: Build independent KIO local-file protocol probe
         shell: msys2 {0}
         run: |
-          bash "$GITHUB_WORKSPACE/.github/scripts/v10.9/build-kio-probe.sh"
+          bash "$GITHUB_WORKSPACE/.github/scripts/v10.10/build-kio-probe.sh"
 
       - name: Deploy Qt KDE KIO MLT and FFmpeg runtime
         shell: msys2 {0}
         run: |
-          bash "$GITHUB_WORKSPACE/.github/scripts/v10.9/deploy-runtime.sh" 2>&1 | tee "$GITHUB_WORKSPACE/deploy-runtime.log"
+          bash "$GITHUB_WORKSPACE/.github/scripts/v10.10/deploy-runtime.sh" 2>&1 | tee "$GITHUB_WORKSPACE/deploy-runtime.log"
 
       - name: Validate packaged runtime inventory
         shell: powershell
@@ -201,7 +201,7 @@ jobs:
       - name: Test portable KIO file protocol directly
         shell: powershell
         run: |
-          & '.\.github\scripts\v10.9\test-kio-probe.ps1' `
+          & '.\.github\scripts\v10.10\test-kio-probe.ps1' `
             -Root (Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut') `
             -ProbeSource (Join-Path $env:GITHUB_WORKSPACE 'kio-probe-build\syncut-kio-probe.exe') `
             -Label 'portable'
@@ -209,13 +209,13 @@ jobs:
       - name: Validate FFmpeg FFprobe MLT and actual media processing
         shell: powershell
         run: |
-          & '.\.github\scripts\v10.9\test-media-runtime.ps1' -Root (Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut')
+          & '.\.github\scripts\v10.10\test-media-runtime.ps1' -Root (Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut')
 
       - name: Smoke test portable GUI and reject visible error dialogs
         id: portable_smoke
         shell: powershell
         run: |
-          & '.\.github\scripts\v10.9\test-gui.ps1' `
+          & '.\.github\scripts\v10.10\test-gui.ps1' `
             -Root (Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut') `
             -Label 'portable-no-ai' `
             -Seconds 75
@@ -275,7 +275,7 @@ jobs:
       - name: Test installed KIO file protocol directly
         shell: powershell
         run: |
-          & '.\.github\scripts\v10.9\test-kio-probe.ps1' `
+          & '.\.github\scripts\v10.10\test-kio-probe.ps1' `
             -Root (Join-Path $env:LOCALAPPDATA 'Programs\Syncut') `
             -ProbeSource (Join-Path $env:GITHUB_WORKSPACE 'kio-probe-build\syncut-kio-probe.exe') `
             -Label 'installed'
@@ -284,7 +284,7 @@ jobs:
         id: installed_smoke
         shell: powershell
         run: |
-          & '.\.github\scripts\v10.9\test-gui.ps1' `
+          & '.\.github\scripts\v10.10\test-gui.ps1' `
             -Root (Join-Path $env:LOCALAPPDATA 'Programs\Syncut') `
             -Label 'installed' `
             -Seconds 75
@@ -317,11 +317,11 @@ jobs:
           foreach ($rel in @('bin\syncut.exe','bin\kioworker.exe','bin\kf6\kio\kio_file.dll')) {
             if (-not (Test-Path -LiteralPath (Join-Path $root $rel))) { throw "Upgrade removed required file: $rel" }
           }
-          & '.\.github\scripts\v10.9\test-kio-probe.ps1' `
+          & '.\.github\scripts\v10.10\test-kio-probe.ps1' `
             -Root $root `
             -ProbeSource (Join-Path $env:GITHUB_WORKSPACE 'kio-probe-build\syncut-kio-probe.exe') `
             -Label 'after-upgrade'
-          & '.\.github\scripts\v10.9\test-gui.ps1' -Root $root -Label 'after-upgrade' -Seconds 45
+          & '.\.github\scripts\v10.10\test-gui.ps1' -Root $root -Label 'after-upgrade' -Seconds 45
 
       - name: Validate uninstaller
         shell: powershell
@@ -352,7 +352,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-v10.9-Diagnostics
+          name: Syncut-v10.10-Diagnostics
           path: |
             runtime-versions.txt
             compile-syncut.log
@@ -375,7 +375,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-v10.9-Raw-Binaries
+          name: Syncut-v10.10-Raw-Binaries
           path: |
             build-windows/bin/syncut.exe
             build-windows/bin/kdenlive_render.exe
@@ -387,7 +387,7 @@ jobs:
       - name: Upload final fully validated packages
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-v10.9-FULLY-VALIDATED-Windows
+          name: Syncut-v10.10-FULLY-VALIDATED-Windows
           path: |
             Syncut-Alpha-0.3-Windows-x64-Setup.exe
             Syncut-Alpha-0.3-Windows-x64-Portable.zip
