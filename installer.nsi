@@ -4,6 +4,7 @@ OutFile "Syncut-Alpha-0.3-Windows-x64-Setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\Syncut"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
+SetOverwrite on
 
 !if /FileExists "dist\Syncut\syncut.ico"
   Icon "dist\Syncut\syncut.ico"
@@ -14,13 +15,26 @@ Page instfiles
 UninstPage uninstConfirm
 UninstPage instfiles
 
-Section "Syncut"
-  ; Close an older Syncut instance before replacing Qt/MLT DLL files.
+!macro StopSyncutProcesses
+  ; Close Syncut and every helper that can keep a packaged DLL or plugin locked.
   nsExec::ExecToLog 'taskkill /F /IM syncut.exe'
-  Sleep 700
+  nsExec::ExecToLog 'taskkill /F /IM kioworker.exe'
+  nsExec::ExecToLog 'taskkill /F /IM kbuildsycoca6.exe'
+  nsExec::ExecToLog 'taskkill /F /IM kdenlive_render.exe'
+  nsExec::ExecToLog 'taskkill /F /IM melt.exe'
+  nsExec::ExecToLog 'taskkill /F /IM melt-7.exe'
+  nsExec::ExecToLog 'taskkill /F /IM ffmpeg.exe'
+  nsExec::ExecToLog 'taskkill /F /IM ffprobe.exe'
+  Sleep 1200
+!macroend
 
-  ; Remove stale runtime files from older alpha builds.
+Section "Syncut"
+  !insertmacro StopSyncutProcesses
+
+  ; Remove stale runtime files from older alpha builds before installing the
+  ; validated Qt/KDE/KIO/MLT runtime tree.
   RMDir /r "$INSTDIR"
+  Sleep 300
   SetOutPath "$INSTDIR"
   File /r "dist\Syncut\*.*"
 
@@ -50,8 +64,7 @@ Section "Syncut"
 SectionEnd
 
 Section "Uninstall"
-  nsExec::ExecToLog 'taskkill /F /IM syncut.exe'
-  Sleep 500
+  !insertmacro StopSyncutProcesses
   Delete "$DESKTOP\Syncut.lnk"
   Delete "$SMPROGRAMS\Syncut\Syncut.lnk"
   RMDir "$SMPROGRAMS\Syncut"

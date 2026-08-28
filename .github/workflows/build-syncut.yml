@@ -1,4 +1,4 @@
-name: Build Syncut Windows - Hardened Validation
+name: Build Syncut Windows - v10.9 KIO Runtime Validation
 
 on:
   workflow_dispatch:
@@ -7,6 +7,7 @@ on:
     paths:
       - 'syncut-source.part*'
       - '.github/workflows/build-syncut.yml'
+      - '.github/scripts/v10.9/**'
       - 'installer.nsi'
 
 permissions:
@@ -15,11 +16,24 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
-    timeout-minutes: 210
+    timeout-minutes: 240
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Validate CI helper syntax
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem '.github\scripts\v10.9' -Filter '*.ps1' -File | ForEach-Object {
+            $null = [scriptblock]::Create((Get-Content -LiteralPath $_.FullName -Raw))
+            Write-Host "PowerShell syntax OK: $($_.Name)"
+          }
+          & 'C:\Program Files\Git\bin\bash.exe' -n '.github/scripts/v10.9/build-kio-probe.sh'
+          if ($LASTEXITCODE -ne 0) { throw 'build-kio-probe.sh has invalid shell syntax.' }
+          & 'C:\Program Files\Git\bin\bash.exe' -n '.github/scripts/v10.9/deploy-runtime.sh'
+          if ($LASTEXITCODE -ne 0) { throw 'deploy-runtime.sh has invalid shell syntax.' }
 
       - name: Verify source parts and reconstruct archive
         shell: powershell
@@ -27,75 +41,21 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $parts = @('syncut-source.part01','syncut-source.part02','syncut-source.part03')
           foreach ($part in $parts) {
-            if (-not (Test-Path $part)) { throw "Missing $part" }
-            $size = (Get-Item $part).Length
+            if (-not (Test-Path -LiteralPath $part)) { throw "Missing $part" }
+            $size = (Get-Item -LiteralPath $part).Length
             if ($size -lt 1000000) { throw "$part is unexpectedly small: $size bytes" }
             Write-Host "$part = $size bytes"
           }
           cmd /c copy /b syncut-source.part01+syncut-source.part02+syncut-source.part03 syncut-source.zip
           if ($LASTEXITCODE -ne 0) { throw 'Failed to reconstruct syncut-source.zip' }
-          if (-not (Test-Path syncut-source.zip)) { throw 'syncut-source.zip was not created' }
+          if (-not (Test-Path -LiteralPath 'syncut-source.zip')) { throw 'syncut-source.zip was not created' }
+          $hash = (Get-FileHash -LiteralPath 'syncut-source.zip' -Algorithm SHA256).Hash
+          Write-Host "Reconstructed source SHA256: $hash"
 
-      - name: Validate and extract source archive
+      - name: Validate source and apply deterministic fixes
         shell: powershell
         run: |
-          $ErrorActionPreference = 'Stop'
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path 'syncut-source.zip'))
-          try {
-            if ($zip.Entries.Count -lt 1000) { throw "Source archive has too few entries: $($zip.Entries.Count)" }
-            if (-not ($zip.Entries.FullName -contains 'Syncut-Claude-Handoff/CMakeLists.txt')) {
-              throw 'Root CMakeLists.txt is missing from source archive'
-            }
-            if (-not ($zip.Entries.FullName -contains 'Syncut-Claude-Handoff/src/syncut/aiassistantwidget.cpp')) {
-              throw 'Syncut local AI source is missing from source archive'
-            }
-          } finally {
-            $zip.Dispose()
-          }
-
-          if (Test-Path source) { Remove-Item source -Recurse -Force }
-          Expand-Archive -LiteralPath syncut-source.zip -DestinationPath source -Force
-          $src = 'source\Syncut-Claude-Handoff'
-          if (-not (Test-Path "$src\CMakeLists.txt")) { throw 'Source extraction failed' }
-
-          $meltBuilder = "$src\src\timeline2\model\builders\meltBuilder.cpp"
-          if (Test-Path $meltBuilder) {
-            $text = Get-Content -LiteralPath $meltBuilder -Raw
-            $fixed = $text.Replace('#include "../undohelper.hpp"', '#include "undohelper.hpp"')
-            if ($fixed -ne $text) { Set-Content -LiteralPath $meltBuilder -Value $fixed -Encoding UTF8 }
-          }
-
-      - name: Static safety checks before the long build
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $src = 'source\Syncut-Claude-Handoff'
-          $ai = "$src\src\syncut"
-
-          $required = @(
-            "$ai\aiassistantwidget.cpp",
-            "$ai\aiassistantwidget.h",
-            "$src\data\icons\22-apps-syncut.png"
-          )
-          foreach ($file in $required) {
-            if (-not (Test-Path $file)) { throw "Required file missing: $file" }
-          }
-
-          $allAi = Get-ChildItem $ai -File -Recurse | Get-Content -Raw
-          if ($allAi -match '\bemit\b') { throw 'Raw Qt emit keyword found. QT_NO_KEYWORDS requires Q_EMIT.' }
-          if ($allAi -match 'generativelanguage|api\.openai|api\.nvidia|Gemini') { throw 'Cloud AI/API code found in local-only Syncut AI.' }
-          if ($allAi -match 'https?://(?!127\.0\.0\.1|localhost)') { throw 'Non-local HTTP endpoint found in Syncut AI.' }
-
-          $cpp = Get-Content "$ai\aiassistantwidget.cpp" -Raw
-          if ($cpp -match 'QJsonObject\s*\{\{[^\r\n]*\+') {
-            throw 'Risky QStringBuilder expression inside QJsonObject initializer found.'
-          }
-          if ($cpp -notmatch '127\.0\.0\.1:11434') { throw 'Ollama localhost detection is missing.' }
-          if ($cpp -notmatch '127\.0\.0\.1:1234') { throw 'Bionic/LM Studio localhost detection is missing.' }
-          if ($cpp -notmatch 'return true;') { throw 'Built-in local fallback availability check is missing.' }
-
-          Write-Host 'Static Syncut/AI safety checks passed.'
+          & '.\.github\scripts\v10.9\validate-source.ps1' -Archive 'syncut-source.zip' -Destination 'source'
 
       - name: Setup MSYS2 UCRT64
         uses: msys2/setup-msys2@v2
@@ -112,9 +72,29 @@ jobs:
             mingw-w64-ucrt-x86_64-toolchain
             mingw-w64-ucrt-x86_64-extra-cmake-modules
             mingw-w64-ucrt-x86_64-kdenlive
+            mingw-w64-ucrt-x86_64-kio
+            mingw-w64-ucrt-x86_64-kservice
             mingw-w64-ucrt-x86_64-qt6-tools
             mingw-w64-ucrt-x86_64-icoutils
             mingw-w64-ucrt-x86_64-gdb
+
+      - name: Record exact toolchain and runtime versions
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          {
+            echo "gcc=$(gcc --version | head -1)"
+            echo "cmake=$(cmake --version | head -1)"
+            echo "ninja=$(ninja --version)"
+            pacman -Q \
+              mingw-w64-ucrt-x86_64-kdenlive \
+              mingw-w64-ucrt-x86_64-kio \
+              mingw-w64-ucrt-x86_64-kservice \
+              mingw-w64-ucrt-x86_64-kcoreaddons \
+              mingw-w64-ucrt-x86_64-qt6-base \
+              mingw-w64-ucrt-x86_64-mlt \
+              mingw-w64-ucrt-x86_64-ffmpeg
+          } | tee "$GITHUB_WORKSPACE/runtime-versions.txt"
 
       - name: Configure CMake
         shell: msys2 {0}
@@ -125,12 +105,10 @@ jobs:
           INSTALL="$GITHUB_WORKSPACE/dist/Syncut"
           rm -rf "$BUILD" "$INSTALL"
           mkdir -p "$BUILD" "$INSTALL"
-
           cmake -S "$SRC" -B "$BUILD" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$INSTALL" \
             -DBUILD_TESTING=OFF
-
           test -f "$BUILD/build.ninja"
 
       - name: Compile Syncut editor
@@ -138,7 +116,7 @@ jobs:
         run: |
           set -euo pipefail
           BUILD="$GITHUB_WORKSPACE/build-windows"
-          cmake --build "$BUILD" --target kdenlive -j2
+          cmake --build "$BUILD" --target kdenlive -j2 2>&1 | tee "$GITHUB_WORKSPACE/compile-syncut.log"
           test -f "$BUILD/bin/syncut.exe"
 
       - name: Compile renderer and thumbnail plugin
@@ -146,8 +124,8 @@ jobs:
         run: |
           set -euo pipefail
           BUILD="$GITHUB_WORKSPACE/build-windows"
-          cmake --build "$BUILD" --target kdenlive_render -j2
-          cmake --build "$BUILD" --target mltpreview -j2
+          cmake --build "$BUILD" --target kdenlive_render -j2 2>&1 | tee "$GITHUB_WORKSPACE/compile-renderer.log"
+          cmake --build "$BUILD" --target mltpreview -j2 2>&1 | tee "$GITHUB_WORKSPACE/compile-thumbnailer.log"
           test -f "$BUILD/bin/kdenlive_render.exe"
           test -n "$(find "$BUILD" -type f -iname 'mltpreview.dll' | head -1)"
 
@@ -161,179 +139,94 @@ jobs:
           test -f "$INSTALL/bin/syncut.exe"
           test -f "$INSTALL/bin/kdenlive_render.exe"
 
-      - name: Deploy Qt QML MLT FFmpeg runtime
+      - name: Build independent KIO local-file protocol probe
         shell: msys2 {0}
         run: |
-          set -euo pipefail
-          SRC="$GITHUB_WORKSPACE/source/Syncut-Claude-Handoff"
-          INSTALL="$GITHUB_WORKSPACE/dist/Syncut"
+          bash "$GITHUB_WORKSPACE/.github/scripts/v10.9/build-kio-probe.sh"
 
-          DEPLOY=""
-          for x in windeployqt6.exe windeployqt6 windeployqt.exe windeployqt; do
-            if command -v "$x" >/dev/null 2>&1; then DEPLOY="$(command -v "$x")"; break; fi
-          done
-          [ -n "$DEPLOY" ] || { echo 'ERROR: windeployqt not found'; exit 20; }
-          "$DEPLOY" --release --qmldir "$SRC" "$INSTALL/bin/syncut.exe"
+      - name: Deploy Qt KDE KIO MLT and FFmpeg runtime
+        shell: msys2 {0}
+        run: |
+          bash "$GITHUB_WORKSPACE/.github/scripts/v10.9/deploy-runtime.sh" 2>&1 | tee "$GITHUB_WORKSPACE/deploy-runtime.log"
 
-          QMLROOT=""
-          if command -v qtpaths6.exe >/dev/null 2>&1; then
-            QMLROOT="$(qtpaths6.exe --query QT_INSTALL_QML 2>/dev/null | tr -d '\r' || true)"
-          elif command -v qtpaths6 >/dev/null 2>&1; then
-            QMLROOT="$(qtpaths6 --query QT_INSTALL_QML 2>/dev/null | tr -d '\r' || true)"
-          fi
-          if [ -z "$QMLROOT" ] || [ ! -d "$QMLROOT" ]; then
-            for candidate in /ucrt64/share/qt6/qml /ucrt64/lib/qt6/qml /ucrt64/qml; do
-              if [ -d "$candidate" ]; then QMLROOT="$candidate"; break; fi
-            done
-          fi
-          [ -n "$QMLROOT" ] && [ -d "$QMLROOT" ] || { echo 'ERROR: Qt QML tree missing'; exit 21; }
-          mkdir -p "$INSTALL/bin/qml"
-          cp -R "$QMLROOT"/. "$INSTALL/bin/qml/"
-
-          # Copy the external command-line tools FIRST.  They have their own
-          # MinGW runtime dependencies, so they must be present before the
-          # recursive DLL dependency pass below.
-          MELT_SRC=""
-          for candidate in /ucrt64/bin/melt.exe /ucrt64/bin/melt-7.exe /ucrt64/bin/mlt-melt.exe; do
-            if [ -f "$candidate" ]; then MELT_SRC="$candidate"; break; fi
-          done
-          if [ -z "$MELT_SRC" ]; then
-            MELT_SRC="$(find /ucrt64 -type f \( -iname 'melt.exe' -o -iname 'melt-7.exe' -o -iname 'mlt-melt.exe' \) | head -1 || true)"
-          fi
-          [ -n "$MELT_SRC" ] && [ -f "$MELT_SRC" ] || { echo 'ERROR: MLT melt missing'; exit 23; }
-          cp -f "$MELT_SRC" "$INSTALL/bin/melt.exe"
-          cp -f "$MELT_SRC" "$INSTALL/bin/melt-7.exe"
-
-          for tool in ffmpeg.exe ffprobe.exe; do
-            [ -f "/ucrt64/bin/$tool" ] || { echo "ERROR: $tool missing"; exit 24; }
-            cp -f "/ucrt64/bin/$tool" "$INSTALL/bin/"
-          done
-
-          # Resolve the dependency closure AFTER syncut, renderer, melt,
-          # ffmpeg and ffprobe are all in the package. Build 10.7 ran this
-          # loop too early, so FFmpeg's MinGW DLLs were never copied.
-          for pass in 1 2 3 4 5 6 7 8; do
-            copied=0
-            while IFS= read -r f; do
-              while IFS= read -r dll; do
-                [ -z "$dll" ] && continue
-                base="$(basename "$dll")"
-                if [ -f "$dll" ] && [ ! -f "$INSTALL/bin/$base" ]; then
-                  cp -f "$dll" "$INSTALL/bin/$base"
-                  echo "Copied dependency: $base"
-                  copied=1
-                fi
-              done < <(ldd "$f" 2>/dev/null | awk '/=> \/ucrt64\// {print $3}' | sort -u)
-            done < <(find "$INSTALL" -type f \( -iname '*.exe' -o -iname '*.dll' \))
-            [ "$copied" -eq 0 ] && break
-          done
-
-          # Keep a dependency report in the Actions log.
-          for tool in syncut.exe kdenlive_render.exe melt.exe ffmpeg.exe ffprobe.exe; do
-            echo "===== ldd: $tool ====="
-            ldd "$INSTALL/bin/$tool" 2>/dev/null || true
-          done
-
-          for d in /ucrt64/lib/mlt-7 /ucrt64/share/mlt-7 /ucrt64/share/mlt /ucrt64/share/frei0r-1 /ucrt64/share/kdenlive /ucrt64/share/kxmlgui6 /ucrt64/share/mime /ucrt64/share/icons; do
-            if [ -d "$d" ]; then
-              rel="${d#/ucrt64/}"
-              mkdir -p "$INSTALL/$(dirname "$rel")"
-              cp -R "$d" "$INSTALL/$(dirname "$rel")/" || true
-            fi
-          done
-
-          ICON="$SRC/data/icons/syncut.ico"
-          [ -f "$ICON" ] && cp -f "$ICON" "$INSTALL/syncut.ico"
-
-          printf '%s\n' '[Paths]' 'Prefix=.' 'Plugins=.' 'Qml2Imports=qml' 'QmlImports=qml' 'Translations=translations' > "$INSTALL/bin/qt.conf"
-
-      - name: Validate packaged runtime files
+      - name: Validate packaged runtime inventory
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $root = Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut'
           $bin = Join-Path $root 'bin'
           $required = @(
-            'syncut.exe','kdenlive_render.exe','melt.exe','melt-7.exe','ffmpeg.exe','ffprobe.exe','qt.conf',
-            'platforms\qwindows.dll','Qt6Core.dll','Qt6Gui.dll','Qt6Widgets.dll','Qt6Network.dll'
+            'syncut.exe','kdenlive_render.exe','kioworker.exe','kbuildsycoca6.exe',
+            'melt.exe','melt-7.exe','ffmpeg.exe','ffprobe.exe','qt.conf','qt6.conf',
+            'platforms\qwindows.dll','Qt6Core.dll','Qt6Gui.dll','Qt6Widgets.dll','Qt6Network.dll',
+            'kf6\kio\kio_file.dll','data\kf6\jsonschema\kpluginmetadata.schema.json'
           )
           foreach ($rel in $required) {
-            $p = Join-Path $bin $rel
-            if (-not (Test-Path $p)) { throw "Packaged runtime file missing: $rel" }
+            $path = Join-Path $bin $rel
+            if (-not (Test-Path -LiteralPath $path)) { throw "Packaged runtime file missing: $rel" }
           }
-          $controls = Get-ChildItem (Join-Path $bin 'qml') -Filter qtquickcontrols2plugin.dll -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $controls) { throw 'qtquickcontrols2plugin.dll missing from packaged QML tree' }
+          $controls = Get-ChildItem (Join-Path $bin 'qml') -Filter 'qtquickcontrols2plugin.dll' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $controls) { throw 'qtquickcontrols2plugin.dll missing from packaged QML tree.' }
+          $mltPlugin = Get-ChildItem $root -Filter 'libmlt*.dll' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $mltPlugin) { throw 'MLT runtime plugins are missing.' }
+          $qtConf = Get-Content -LiteralPath (Join-Path $bin 'qt.conf') -Raw
+          foreach ($line in @('Prefix=..','LibraryExecutables=bin','Plugins=bin','Data=bin/data')) {
+            if ($qtConf -notmatch [regex]::Escape($line)) { throw "qt.conf is missing: $line" }
+          }
           Write-Host "QtQuick Controls plugin: $($controls.FullName)"
+          Write-Host "MLT plugin sample: $($mltPlugin.FullName)"
 
-      - name: Validate FFmpeg and MLT executables
+      - name: Audit every packaged PE dependency
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          INSTALL="$GITHUB_WORKSPACE/dist/Syncut"
+          REPORT="$GITHUB_WORKSPACE/pe-dependency-audit.txt"
+          : > "$REPORT"
+          failed=0
+          while IFS= read -r file; do
+            missing="$(ldd "$file" 2>/dev/null | grep -i 'not found' || true)"
+            if [ -n "$missing" ]; then
+              echo "===== $file =====" | tee -a "$REPORT"
+              echo "$missing" | tee -a "$REPORT"
+              failed=1
+            fi
+          done < <(find "$INSTALL" -type f \( -iname '*.exe' -o -iname '*.dll' \) -print)
+          if [ "$failed" -ne 0 ]; then
+            echo 'One or more packaged PE files have unresolved DLL dependencies.'
+            exit 30
+          fi
+          echo 'All packaged EXE and DLL dependencies resolved.' | tee -a "$REPORT"
+
+      - name: Test portable KIO file protocol directly
         shell: powershell
         run: |
-          $ErrorActionPreference = 'Stop'
-          $bin = Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut\bin'
-          $oldPath = $env:PATH
-          $env:PATH = "$bin;$env:SystemRoot\System32;$env:SystemRoot"
-          try {
-            $tools = @(
-              @{ Name = 'ffmpeg.exe'; Args = @('-version') },
-              @{ Name = 'ffprobe.exe'; Args = @('-version') },
-              @{ Name = 'melt.exe'; Args = @('-version') }
-            )
-            foreach ($tool in $tools) {
-              $exe = Join-Path $bin $tool.Name
-              Write-Host "Testing packaged $($tool.Name)..."
-              try {
-                $p = Start-Process -FilePath $exe -ArgumentList $tool.Args -WorkingDirectory $bin -Wait -PassThru -NoNewWindow
-              } catch {
-                Write-Host "Files in packaged bin:"
-                Get-ChildItem $bin -File | Sort-Object Name | Select-Object -ExpandProperty Name
-                throw "Packaged $($tool.Name) could not start: $($_.Exception.Message)"
-              }
-              if ($p.ExitCode -ne 0) { throw "Packaged $($tool.Name) failed with exit code $($p.ExitCode)" }
-            }
-          } finally {
-            $env:PATH = $oldPath
-          }
+          & '.\.github\scripts\v10.9\test-kio-probe.ps1' `
+            -Root (Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut') `
+            -ProbeSource (Join-Path $env:GITHUB_WORKSPACE 'kio-probe-build\syncut-kio-probe.exe') `
+            -Label 'portable'
 
-      - name: Smoke test portable package with NO optional AI runtime
+      - name: Validate FFmpeg FFprobe MLT and actual media processing
+        shell: powershell
+        run: |
+          & '.\.github\scripts\v10.9\test-media-runtime.ps1' -Root (Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut')
+
+      - name: Smoke test portable GUI and reject visible error dialogs
         id: portable_smoke
         shell: powershell
         run: |
-          $ErrorActionPreference = 'Stop'
-          $root = Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut'
-          $bin = Join-Path $root 'bin'
-          $exe = Join-Path $bin 'syncut.exe'
-          $clean = Join-Path $env:RUNNER_TEMP 'syncut-clean-profile-no-ai'
-          if (Test-Path $clean) { Remove-Item $clean -Recurse -Force }
-          New-Item -ItemType Directory -Force -Path $clean | Out-Null
-
-          $env:XDG_CONFIG_HOME = Join-Path $clean 'config'
-          $env:XDG_CACHE_HOME = Join-Path $clean 'cache'
-          $env:XDG_DATA_HOME = Join-Path $clean 'data'
-          $env:QML2_IMPORT_PATH = Join-Path $bin 'qml'
-          $env:QML_IMPORT_PATH = Join-Path $bin 'qml'
-          $env:MLT_PREFIX = $root
-          $env:PATH = "$bin;$env:SystemRoot\System32;$env:SystemRoot"
-
-          $stdout = Join-Path $env:GITHUB_WORKSPACE 'syncut-portable-out.log'
-          $stderr = Join-Path $env:GITHUB_WORKSPACE 'syncut-portable-err.log'
-          $p = Start-Process -FilePath $exe -WorkingDirectory $bin -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-          Start-Sleep -Seconds 45
-          if ($p.HasExited) {
-            Write-Host "Syncut exited. Code: $($p.ExitCode)"
-            if (Test-Path $stdout) { Get-Content $stdout -Tail 400 }
-            if (Test-Path $stderr) { Get-Content $stderr -Tail 800 }
-            throw "Portable Syncut smoke test failed: $($p.ExitCode)"
-          }
-          Write-Host 'Portable Syncut survived 45 seconds with no Ollama/Bionic service present.'
-          Stop-Process -Id $p.Id -Force
+          & '.\.github\scripts\v10.9\test-gui.ps1' `
+            -Root (Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut') `
+            -Label 'portable-no-ai' `
+            -Seconds 75
 
       - name: Create portable ZIP
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           Compress-Archive -Path 'dist\Syncut\*' -DestinationPath 'Syncut-Alpha-0.3-Windows-x64-Portable.zip' -Force
-          if (-not (Test-Path 'Syncut-Alpha-0.3-Windows-x64-Portable.zip')) { throw 'Portable ZIP was not created' }
-          if ((Get-Item 'Syncut-Alpha-0.3-Windows-x64-Portable.zip').Length -lt 10000000) { throw 'Portable ZIP is unexpectedly small' }
+          if (-not (Test-Path -LiteralPath 'Syncut-Alpha-0.3-Windows-x64-Portable.zip')) { throw 'Portable ZIP was not created.' }
+          if ((Get-Item -LiteralPath 'Syncut-Alpha-0.3-Windows-x64-Portable.zip').Length -lt 10000000) { throw 'Portable ZIP is unexpectedly small.' }
 
       - name: Install NSIS
         shell: powershell
@@ -345,71 +238,105 @@ jobs:
             "${env:ProgramFiles(x86)}\NSIS\makensis.exe",
             'C:\ProgramData\chocolatey\bin\makensis.exe'
           )
-          $makensis = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+          $makensis = $candidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
           if (-not $makensis) {
-            $cmd = Get-Command makensis.exe -ErrorAction SilentlyContinue
-            if ($cmd) { $makensis = $cmd.Source }
+            $command = Get-Command 'makensis.exe' -ErrorAction SilentlyContinue
+            if ($command) { $makensis = $command.Source }
           }
-          if (-not $makensis) { throw 'makensis.exe not found' }
+          if (-not $makensis) { throw 'makensis.exe not found.' }
           "MAKENSIS=$makensis" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Create Windows installer
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          if (-not (Test-Path 'installer.nsi')) { throw 'installer.nsi missing' }
-          & $env:MAKENSIS installer.nsi
+          if (-not (Test-Path -LiteralPath 'installer.nsi')) { throw 'installer.nsi missing.' }
+          & $env:MAKENSIS 'installer.nsi'
           if ($LASTEXITCODE -ne 0) { throw "makensis failed: $LASTEXITCODE" }
-          if (-not (Test-Path 'Syncut-Alpha-0.3-Windows-x64-Setup.exe')) { throw 'Installer was not produced' }
+          if (-not (Test-Path -LiteralPath 'Syncut-Alpha-0.3-Windows-x64-Setup.exe')) { throw 'Installer was not produced.' }
+          if ((Get-Item -LiteralPath 'Syncut-Alpha-0.3-Windows-x64-Setup.exe').Length -lt 10000000) { throw 'Installer is unexpectedly small.' }
 
-      - name: Silent-install the REAL installer on a clean runner
+      - name: Silent-install the real installer on a clean runner
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          $setup = Resolve-Path 'Syncut-Alpha-0.3-Windows-x64-Setup.exe'
-          $existing = Join-Path $env:LOCALAPPDATA 'Programs\Syncut'
-          if (Test-Path $existing) { Remove-Item $existing -Recurse -Force }
-          $p = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Silent installer failed: $($p.ExitCode)" }
-          $installedExe = Join-Path $existing 'bin\syncut.exe'
-          if (-not (Test-Path $installedExe)) { throw 'Installed syncut.exe is missing' }
-          foreach ($rel in @('bin\melt.exe','bin\ffmpeg.exe','bin\platforms\qwindows.dll')) {
-            if (-not (Test-Path (Join-Path $existing $rel))) { throw "Installed runtime missing: $rel" }
+          $setup = Resolve-Path -LiteralPath 'Syncut-Alpha-0.3-Windows-x64-Setup.exe'
+          $installRoot = Join-Path $env:LOCALAPPDATA 'Programs\Syncut'
+          if (Test-Path -LiteralPath $installRoot) { Remove-Item -LiteralPath $installRoot -Recurse -Force }
+          $process = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Silent installer failed: $($process.ExitCode)" }
+          foreach ($rel in @(
+            'bin\syncut.exe','bin\kioworker.exe','bin\kf6\kio\kio_file.dll',
+            'bin\melt.exe','bin\ffmpeg.exe','bin\platforms\qwindows.dll','Uninstall.exe'
+          )) {
+            if (-not (Test-Path -LiteralPath (Join-Path $installRoot $rel))) { throw "Installed runtime missing: $rel" }
           }
 
-      - name: Smoke test the INSTALLED application
+      - name: Test installed KIO file protocol directly
+        shell: powershell
+        run: |
+          & '.\.github\scripts\v10.9\test-kio-probe.ps1' `
+            -Root (Join-Path $env:LOCALAPPDATA 'Programs\Syncut') `
+            -ProbeSource (Join-Path $env:GITHUB_WORKSPACE 'kio-probe-build\syncut-kio-probe.exe') `
+            -Label 'installed'
+
+      - name: Smoke test the installed application
         id: installed_smoke
+        shell: powershell
+        run: |
+          & '.\.github\scripts\v10.9\test-gui.ps1' `
+            -Root (Join-Path $env:LOCALAPPDATA 'Programs\Syncut') `
+            -Label 'installed' `
+            -Seconds 75
+
+      - name: Reinstall over a running copy and validate upgrade recovery
+        id: upgrade_smoke
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $root = Join-Path $env:LOCALAPPDATA 'Programs\Syncut'
           $bin = Join-Path $root 'bin'
           $exe = Join-Path $bin 'syncut.exe'
-          $clean = Join-Path $env:RUNNER_TEMP 'syncut-clean-installed'
-          if (Test-Path $clean) { Remove-Item $clean -Recurse -Force }
-          New-Item -ItemType Directory -Force -Path $clean | Out-Null
-          $env:XDG_CONFIG_HOME = Join-Path $clean 'config'
-          $env:XDG_CACHE_HOME = Join-Path $clean 'cache'
-          $env:XDG_DATA_HOME = Join-Path $clean 'data'
-          $env:QML2_IMPORT_PATH = Join-Path $bin 'qml'
-          $env:QML_IMPORT_PATH = Join-Path $bin 'qml'
-          $env:MLT_PREFIX = $root
+          $setup = Resolve-Path -LiteralPath 'Syncut-Alpha-0.3-Windows-x64-Setup.exe'
           $env:PATH = "$bin;$env:SystemRoot\System32;$env:SystemRoot"
-          $stdout = Join-Path $env:GITHUB_WORKSPACE 'syncut-installed-out.log'
-          $stderr = Join-Path $env:GITHUB_WORKSPACE 'syncut-installed-err.log'
-          $p = Start-Process -FilePath $exe -WorkingDirectory $bin -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-          Start-Sleep -Seconds 60
-          if ($p.HasExited) {
-            Write-Host "Installed Syncut exited. Code: $($p.ExitCode)"
-            if (Test-Path $stdout) { Get-Content $stdout -Tail 400 }
-            if (Test-Path $stderr) { Get-Content $stderr -Tail 800 }
-            throw "Installed Syncut smoke test failed: $($p.ExitCode)"
+          $env:MLT_PREFIX = $root
+          $env:MLT_REPOSITORY = Join-Path $root 'lib\mlt-7'
+          $env:MLT_DATA = Join-Path $root 'share\mlt-7'
+          $running = Start-Process -FilePath $exe -WorkingDirectory $bin -PassThru
+          Start-Sleep -Seconds 12
+          $running.Refresh()
+          if ($running.HasExited) { throw 'Syncut exited before the upgrade test.' }
+          $installer = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
+          if ($installer.ExitCode -ne 0) { throw "Upgrade installer failed: $($installer.ExitCode)" }
+          Start-Sleep -Seconds 2
+          $running.Refresh()
+          if (-not $running.HasExited) {
+            Stop-Process -Id $running.Id -Force -ErrorAction SilentlyContinue
+            throw 'Installer did not close the running Syncut process before replacing files.'
           }
-          Write-Host 'Installed Syncut survived 60 seconds with a clean PATH and clean profile.'
-          Stop-Process -Id $p.Id -Force
+          foreach ($rel in @('bin\syncut.exe','bin\kioworker.exe','bin\kf6\kio\kio_file.dll')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $root $rel))) { throw "Upgrade removed required file: $rel" }
+          }
+          & '.\.github\scripts\v10.9\test-kio-probe.ps1' `
+            -Root $root `
+            -ProbeSource (Join-Path $env:GITHUB_WORKSPACE 'kio-probe-build\syncut-kio-probe.exe') `
+            -Label 'after-upgrade'
+          & '.\.github\scripts\v10.9\test-gui.ps1' -Root $root -Label 'after-upgrade' -Seconds 45
 
-      - name: Capture crash backtrace if a smoke test fails
-        if: failure() && (steps.portable_smoke.outcome == 'failure' || steps.installed_smoke.outcome == 'failure')
+      - name: Validate uninstaller
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:LOCALAPPDATA 'Programs\Syncut'
+          $uninstall = Join-Path $root 'Uninstall.exe'
+          if (-not (Test-Path -LiteralPath $uninstall)) { throw 'Uninstaller is missing.' }
+          $process = Start-Process -FilePath $uninstall -ArgumentList '/S' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Uninstaller failed: $($process.ExitCode)" }
+          Start-Sleep -Seconds 2
+          if (Test-Path -LiteralPath (Join-Path $root 'bin\syncut.exe')) { throw 'Uninstaller left syncut.exe behind.' }
+
+      - name: Capture crash backtrace if a GUI smoke test fails
+        if: failure() && (steps.portable_smoke.outcome == 'failure' || steps.installed_smoke.outcome == 'failure' || steps.upgrade_smoke.outcome == 'failure')
         continue-on-error: true
         shell: msys2 {0}
         run: |
@@ -417,20 +344,29 @@ jobs:
           cd "$INSTALL/bin"
           export PATH="$INSTALL/bin:/ucrt64/bin:$PATH"
           export MLT_PREFIX="$INSTALL"
-          export QML2_IMPORT_PATH="$INSTALL/bin/qml"
-          export QML_IMPORT_PATH="$INSTALL/bin/qml"
+          export MLT_REPOSITORY="$INSTALL/lib/mlt-7"
+          export MLT_DATA="$INSTALL/share/mlt-7"
           timeout 60s gdb -batch -ex 'set pagination off' -ex run -ex 'thread apply all bt full' --args "$INSTALL/bin/syncut.exe" > "$GITHUB_WORKSPACE/syncut-gdb.txt" 2>&1 || true
 
       - name: Upload diagnostics always
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-v10.8-Diagnostics
+          name: Syncut-v10.9-Diagnostics
           path: |
-            syncut-portable-out.log
-            syncut-portable-err.log
-            syncut-installed-out.log
-            syncut-installed-err.log
+            runtime-versions.txt
+            compile-syncut.log
+            compile-renderer.log
+            compile-thumbnailer.log
+            deploy-runtime.log
+            pe-dependency-audit.txt
+            kio-probe-*-out.log
+            kio-probe-*-err.log
+            melt-query.log
+            melt-query-error.log
+            syncut-*-out.log
+            syncut-*-err.log
+            syncut-*-windows.log
             syncut-gdb.txt
           if-no-files-found: warn
           retention-days: 14
@@ -439,18 +375,19 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-v10.8-Raw-Binaries
+          name: Syncut-v10.9-Raw-Binaries
           path: |
             build-windows/bin/syncut.exe
             build-windows/bin/kdenlive_render.exe
             build-windows/**/mltpreview.dll
+            kio-probe-build/syncut-kio-probe.exe
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Upload final validated packages
+      - name: Upload final fully validated packages
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-v10.8-VALIDATED-Windows
+          name: Syncut-v10.9-FULLY-VALIDATED-Windows
           path: |
             Syncut-Alpha-0.3-Windows-x64-Setup.exe
             Syncut-Alpha-0.3-Windows-x64-Portable.zip
