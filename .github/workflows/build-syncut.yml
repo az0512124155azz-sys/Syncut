@@ -190,21 +190,9 @@ jobs:
           mkdir -p "$INSTALL/bin/qml"
           cp -R "$QMLROOT"/. "$INSTALL/bin/qml/"
 
-          for pass in 1 2 3 4 5 6; do
-            copied=0
-            while IFS= read -r f; do
-              while IFS= read -r dll; do
-                [ -z "$dll" ] && continue
-                base="$(basename "$dll")"
-                if [ -f "$dll" ] && [ ! -f "$INSTALL/bin/$base" ]; then
-                  cp "$dll" "$INSTALL/bin/$base"
-                  copied=1
-                fi
-              done < <(ldd "$f" 2>/dev/null | awk '/=> \/ucrt64\// {print $3}' | sort -u)
-            done < <(find "$INSTALL" -type f \( -iname '*.exe' -o -iname '*.dll' \))
-            [ "$copied" -eq 0 ] && break
-          done
-
+          # Copy the external command-line tools FIRST.  They have their own
+          # MinGW runtime dependencies, so they must be present before the
+          # recursive DLL dependency pass below.
           MELT_SRC=""
           for candidate in /ucrt64/bin/melt.exe /ucrt64/bin/melt-7.exe /ucrt64/bin/mlt-melt.exe; do
             if [ -f "$candidate" ]; then MELT_SRC="$candidate"; break; fi
@@ -219,6 +207,31 @@ jobs:
           for tool in ffmpeg.exe ffprobe.exe; do
             [ -f "/ucrt64/bin/$tool" ] || { echo "ERROR: $tool missing"; exit 24; }
             cp -f "/ucrt64/bin/$tool" "$INSTALL/bin/"
+          done
+
+          # Resolve the dependency closure AFTER syncut, renderer, melt,
+          # ffmpeg and ffprobe are all in the package. Build 10.7 ran this
+          # loop too early, so FFmpeg's MinGW DLLs were never copied.
+          for pass in 1 2 3 4 5 6 7 8; do
+            copied=0
+            while IFS= read -r f; do
+              while IFS= read -r dll; do
+                [ -z "$dll" ] && continue
+                base="$(basename "$dll")"
+                if [ -f "$dll" ] && [ ! -f "$INSTALL/bin/$base" ]; then
+                  cp -f "$dll" "$INSTALL/bin/$base"
+                  echo "Copied dependency: $base"
+                  copied=1
+                fi
+              done < <(ldd "$f" 2>/dev/null | awk '/=> \/ucrt64\// {print $3}' | sort -u)
+            done < <(find "$INSTALL" -type f \( -iname '*.exe' -o -iname '*.dll' \))
+            [ "$copied" -eq 0 ] && break
+          done
+
+          # Keep a dependency report in the Actions log.
+          for tool in syncut.exe kdenlive_render.exe melt.exe ffmpeg.exe ffprobe.exe; do
+            echo "===== ldd: $tool ====="
+            ldd "$INSTALL/bin/$tool" 2>/dev/null || true
           done
 
           for d in /ucrt64/lib/mlt-7 /ucrt64/share/mlt-7 /ucrt64/share/mlt /ucrt64/share/frei0r-1 /ucrt64/share/kdenlive /ucrt64/share/kxmlgui6 /ucrt64/share/mime /ucrt64/share/icons; do
@@ -260,12 +273,23 @@ jobs:
           $oldPath = $env:PATH
           $env:PATH = "$bin;$env:SystemRoot\System32;$env:SystemRoot"
           try {
-            & (Join-Path $bin 'ffmpeg.exe') -version | Select-Object -First 3
-            if ($LASTEXITCODE -ne 0) { throw 'Packaged ffmpeg.exe failed to start' }
-            & (Join-Path $bin 'ffprobe.exe') -version | Select-Object -First 3
-            if ($LASTEXITCODE -ne 0) { throw 'Packaged ffprobe.exe failed to start' }
-            & (Join-Path $bin 'melt.exe') -version | Select-Object -First 8
-            if ($LASTEXITCODE -ne 0) { throw 'Packaged melt.exe failed to start' }
+            $tools = @(
+              @{ Name = 'ffmpeg.exe'; Args = @('-version') },
+              @{ Name = 'ffprobe.exe'; Args = @('-version') },
+              @{ Name = 'melt.exe'; Args = @('-version') }
+            )
+            foreach ($tool in $tools) {
+              $exe = Join-Path $bin $tool.Name
+              Write-Host "Testing packaged $($tool.Name)..."
+              try {
+                $p = Start-Process -FilePath $exe -ArgumentList $tool.Args -WorkingDirectory $bin -Wait -PassThru -NoNewWindow
+              } catch {
+                Write-Host "Files in packaged bin:"
+                Get-ChildItem $bin -File | Sort-Object Name | Select-Object -ExpandProperty Name
+                throw "Packaged $($tool.Name) could not start: $($_.Exception.Message)"
+              }
+              if ($p.ExitCode -ne 0) { throw "Packaged $($tool.Name) failed with exit code $($p.ExitCode)" }
+            }
           } finally {
             $env:PATH = $oldPath
           }
@@ -401,7 +425,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-v10.7-Diagnostics
+          name: Syncut-v10.8-Diagnostics
           path: |
             syncut-portable-out.log
             syncut-portable-err.log
@@ -415,7 +439,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-v10.7-Raw-Binaries
+          name: Syncut-v10.8-Raw-Binaries
           path: |
             build-windows/bin/syncut.exe
             build-windows/bin/kdenlive_render.exe
@@ -426,7 +450,7 @@ jobs:
       - name: Upload final validated packages
         uses: actions/upload-artifact@v4
         with:
-          name: Syncut-v10.7-VALIDATED-Windows
+          name: Syncut-v10.8-VALIDATED-Windows
           path: |
             Syncut-Alpha-0.3-Windows-x64-Setup.exe
             Syncut-Alpha-0.3-Windows-x64-Portable.zip
