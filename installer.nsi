@@ -1,6 +1,6 @@
 Unicode true
-Name "Syncut Alpha 0.2"
-OutFile "Syncut-Alpha-0.2-Windows-x64-Setup.exe"
+Name "Syncut Alpha 0.3"
+OutFile "Syncut-Alpha-0.3-Windows-x64-Setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\Syncut"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
@@ -36,8 +36,8 @@ Section "Syncut"
 
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayName" "Syncut Alpha 0.2"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayVersion" "0.2"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayName" "Syncut Alpha 0.3"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayVersion" "0.3"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "Publisher" "Syncut"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "UninstallString" '"$INSTDIR\Uninstall.exe"'

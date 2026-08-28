@@ -1,0 +1,25 @@
+Syncut v10.7 hardened validation build
+
+The GitHub workflow must pass ALL gates before the final installer artifact is uploaded:
+1. Source part presence and size checks.
+2. ZIP reconstruction and archive structure validation.
+3. Local-AI-only static checks: no Gemini/OpenAI/NVIDIA/cloud endpoints.
+4. QT_NO_KEYWORDS check: no raw emit keyword in Syncut AI.
+5. QStringBuilder/QJsonObject regression check for the previous compiler failure.
+6. CMake configure.
+7. Full Syncut editor compilation.
+8. Renderer and mltpreview compilation.
+9. cmake install.
+10. Qt/QML runtime deployment.
+11. Required DLL/QML/QtQuick.Controls checks.
+12. FFmpeg, ffprobe and MLT melt executable launch checks using a clean PATH.
+13. Portable Syncut 45-second smoke test with no Ollama/Bionic service.
+14. NSIS installer generation.
+15. Silent installation of the real installer on the GitHub Windows runner.
+16. Installed-file verification.
+17. Installed Syncut 60-second smoke test with clean PATH and clean profile.
+18. Crash diagnostics upload if a smoke test fails.
+19. Final installer is uploaded ONLY if every required gate above passes.
+
+A green workflow means the packaged and installed executable actually stayed running on Windows.
+It cannot mathematically guarantee that no future bug will ever exist, but it prevents publishing a build that fails these tested startup/build/runtime paths.
