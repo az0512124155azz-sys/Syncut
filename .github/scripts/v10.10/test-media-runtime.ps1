@@ -15,33 +15,25 @@ $env:MLT_PREFIX = $Root
 $env:MLT_REPOSITORY = Join-Path $Root 'lib\mlt-7'
 $env:MLT_DATA = Join-Path $Root 'share\mlt-7'
 
-function Invoke-CheckedTool {
-    param(
-        [Parameter(Mandatory = $true)][string]$Exe,
-        [Parameter(Mandatory = $true)][string[]]$Arguments,
-        [Parameter(Mandatory = $true)][string]$Name
-    )
-
-    if (-not (Test-Path -LiteralPath $Exe)) {
-        throw "Packaged tool is missing: $Name"
-    }
-
-    Write-Host "Testing packaged $Name..."
-    $p = Start-Process -FilePath $Exe -ArgumentList $Arguments -WorkingDirectory $bin -Wait -PassThru -NoNewWindow
-    $p.Refresh()
-    if ($p.ExitCode -ne 0) {
-        throw "Packaged $Name failed with exit code $($p.ExitCode)."
-    }
-}
-
 try {
     $ffmpeg = Join-Path $bin 'ffmpeg.exe'
     $ffprobe = Join-Path $bin 'ffprobe.exe'
-    $meltExe = Join-Path $bin 'melt.exe'
+    $melt = Join-Path $bin 'melt.exe'
 
-    Invoke-CheckedTool -Exe $ffmpeg -Arguments @('-version') -Name 'ffmpeg.exe'
-    Invoke-CheckedTool -Exe $ffprobe -Arguments @('-version') -Name 'ffprobe.exe'
-    Invoke-CheckedTool -Exe $meltExe -Arguments @('-version') -Name 'melt.exe'
+    foreach ($exe in @($ffmpeg, $ffprobe, $melt)) {
+        if (-not (Test-Path -LiteralPath $exe)) {
+            throw "Missing packaged tool: $exe"
+        }
+    }
+
+    & $ffmpeg -version
+    if ($LASTEXITCODE -ne 0) { throw "FFmpeg failed: $LASTEXITCODE" }
+
+    & $ffprobe -version
+    if ($LASTEXITCODE -ne 0) { throw "FFprobe failed: $LASTEXITCODE" }
+
+    & $melt -version
+    if ($LASTEXITCODE -ne 0) { throw "MLT melt failed: $LASTEXITCODE" }
 
     $sample = Join-Path $env:GITHUB_WORKSPACE 'syncut-ffmpeg-sample.mp4'
     Remove-Item -LiteralPath $sample -Force -ErrorAction SilentlyContinue
@@ -65,52 +57,45 @@ try {
     }
 
     $probeOutput = & $ffprobe -v error -show_entries 'format=duration' -of json $sample 2>&1
-    $ffprobeExit = $LASTEXITCODE
+    $probeExit = $LASTEXITCODE
     $probeText = ($probeOutput | Out-String).Trim()
 
-    if ($ffprobeExit -ne 0) {
+    if ($probeExit -ne 0) {
         Write-Host $probeText
-        throw "FFprobe could not inspect the rendered sample. Exit code: $ffprobeExit"
-    }
-
-    if ([string]::IsNullOrWhiteSpace($probeText)) {
-        throw 'FFprobe returned empty output.'
+        throw "FFprobe inspection failed: $probeExit"
     }
 
     $probeObject = $probeText | ConvertFrom-Json -ErrorAction Stop
-
     if ($null -eq $probeObject.format -or [string]::IsNullOrWhiteSpace([string]$probeObject.format.duration)) {
-        Write-Host $probeText
         throw 'FFprobe JSON did not contain format.duration.'
     }
 
     Write-Host "FFprobe OK. Duration: $($probeObject.format.duration)"
 
-    $queryOut = Join-Path $env:GITHUB_WORKSPACE 'melt-query.log'
-    $queryErr = Join-Path $env:GITHUB_WORKSPACE 'melt-query-error.log'
-    Remove-Item -LiteralPath $queryOut,$queryErr -Force -ErrorAction SilentlyContinue
+    $mltOut = Join-Path $env:GITHUB_WORKSPACE 'melt-functional-out.log'
+    $mltErr = Join-Path $env:GITHUB_WORKSPACE 'melt-functional-error.log'
+    Remove-Item -LiteralPath $mltOut,$mltErr -Force -ErrorAction SilentlyContinue
 
-    $melt = Start-Process -FilePath $meltExe `
-        -ArgumentList @('-query','producers') `
+    $p = Start-Process `
+        -FilePath $melt `
+        -ArgumentList @($sample, '-consumer', 'null', 'real_time=-1', 'terminate_on_pause=1') `
         -WorkingDirectory $bin `
-        -Wait -PassThru -NoNewWindow `
-        -RedirectStandardOutput $queryOut `
-        -RedirectStandardError $queryErr
+        -Wait `
+        -PassThru `
+        -NoNewWindow `
+        -RedirectStandardOutput $mltOut `
+        -RedirectStandardError $mltErr
 
-    $melt.Refresh()
+    $p.Refresh()
 
-    if ($melt.ExitCode -ne 0) {
-        throw "MLT producer query failed with exit code $($melt.ExitCode)."
+    if (Test-Path -LiteralPath $mltOut) { Get-Content -LiteralPath $mltOut -Tail 200 }
+    if (Test-Path -LiteralPath $mltErr) { Get-Content -LiteralPath $mltErr -Tail 200 }
+
+    if ($p.ExitCode -ne 0) {
+        throw "MLT could not process the rendered sample. Exit code: $($p.ExitCode)"
     }
 
-    $queryText = ((Get-Content -LiteralPath $queryOut -Raw -ErrorAction SilentlyContinue) + "`n" +
-        (Get-Content -LiteralPath $queryErr -Raw -ErrorAction SilentlyContinue))
-
-    if ($queryText -notmatch '(?i)avformat|color') {
-        throw 'MLT did not expose expected producers.'
-    }
-
-    Write-Host 'FFmpeg, FFprobe, and MLT runtime tests passed.'
+    Write-Host 'FFmpeg, FFprobe, and real MLT media processing tests passed.'
 }
 finally {
     $env:PATH = $oldPath
