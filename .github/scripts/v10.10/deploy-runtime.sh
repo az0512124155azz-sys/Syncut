@@ -36,8 +36,6 @@ fi
 mkdir -p "$BIN/qml"
 cp -R "$QMLROOT"/. "$BIN/qml/"
 
-# KIO is not a linked-DLL-only dependency. It requires its worker executable,
-# protocol plugins, and KDE Frameworks data files at runtime.
 for helper in kioworker.exe ktrash6.exe ktelnetservice6.exe kbuildsycoca6.exe; do
   if [ -f "/ucrt64/bin/$helper" ]; then
     cp -f "/ucrt64/bin/$helper" "$BIN/"
@@ -51,8 +49,6 @@ if [ -d /ucrt64/share/qt6/plugins/kf6 ]; then
 fi
 [ -f "$BIN/kf6/kio/kio_file.dll" ] || { echo 'ERROR: kio_file.dll missing'; exit 23; }
 
-# Windows MSYS2 stores Frameworks data under bin/data. Copy only runtime data
-# and never overwrite Syncut's own installed resources with stock Kdenlive data.
 for data_dir in kf6 locale qlogging-categories6 knotifications6 kservices6 kservicetypes6; do
   if [ -d "/ucrt64/bin/data/$data_dir" ]; then
     mkdir -p "$BIN/data/$data_dir"
@@ -85,7 +81,23 @@ for tool in ffmpeg.exe ffprobe.exe; do
   cp -f "/ucrt64/bin/$tool" "$BIN/"
 done
 
-for runtime_dir in /ucrt64/lib/mlt-7 /ucrt64/share/mlt-7 /ucrt64/share/mlt /ucrt64/share/frei0r-1 /ucrt64/share/kdenlive; do
+# Current MSYS2 MLT packages use lib/mlt and share/mlt, NOT lib/mlt-7/share/mlt-7.
+# Copy the real package layout and create compatibility mirrors for code that still
+# looks for the older "-7" directory names.
+[ -d /ucrt64/lib/mlt ] || { echo 'ERROR: /ucrt64/lib/mlt missing'; exit 26; }
+[ -d /ucrt64/share/mlt ] || { echo 'ERROR: /ucrt64/share/mlt missing'; exit 27; }
+
+mkdir -p "$INSTALL/lib/mlt" "$INSTALL/share/mlt"
+cp -R /ucrt64/lib/mlt/. "$INSTALL/lib/mlt/"
+cp -R /ucrt64/share/mlt/. "$INSTALL/share/mlt/"
+
+rm -rf "$INSTALL/lib/mlt-7" "$INSTALL/share/mlt-7"
+mkdir -p "$INSTALL/lib/mlt-7" "$INSTALL/share/mlt-7"
+cp -R "$INSTALL/lib/mlt"/. "$INSTALL/lib/mlt-7/"
+cp -R "$INSTALL/share/mlt"/. "$INSTALL/share/mlt-7/"
+
+# Other MLT/Kdenlive runtime data.
+for runtime_dir in /ucrt64/share/frei0r-1 /ucrt64/share/kdenlive; do
   if [ -d "$runtime_dir" ]; then
     relative="${runtime_dir#/ucrt64/}"
     mkdir -p "$INSTALL/$(dirname "$relative")"
@@ -93,8 +105,14 @@ for runtime_dir in /ucrt64/lib/mlt-7 /ucrt64/share/mlt-7 /ucrt64/share/mlt /ucrt
   fi
 done
 
-# Resolve the DLL dependency closure only after every executable and plugin is
-# present. This includes dependencies of FFmpeg, MLT, kioworker and kio_file.
+# Hard validation of the exact files that previously failed at runtime.
+test -n "$(find "$INSTALL/lib/mlt" -maxdepth 1 -type f -iname 'libmlt*.dll' | head -1)" || {
+  echo 'ERROR: MLT plugin DLLs were not packaged'; exit 28;
+}
+test -f "$INSTALL/share/mlt/profiles/dv_pal" || {
+  echo 'ERROR: MLT profile dv_pal was not packaged'; exit 29;
+}
+
 for pass in 1 2 3 4 5 6 7 8 9 10 11 12; do
   copied=0
   while IFS= read -r file; do
@@ -114,8 +132,6 @@ done
 ICON="$SRC/data/icons/syncut.ico"
 [ -f "$ICON" ] && cp -f "$ICON" "$INSTALL/syncut.ico"
 
-# The prefix is the package root. Explicit paths make Syncut, kioworker.exe,
-# and the independent KIO probe resolve the same portable runtime tree.
 cat > "$BIN/qt.conf" <<'QTCONF'
 [Paths]
 Prefix=..
