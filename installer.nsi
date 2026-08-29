@@ -16,7 +16,6 @@ UninstPage uninstConfirm
 UninstPage instfiles
 
 !macro StopSyncutProcesses
-  ; Close Syncut and every helper that can keep a packaged DLL or plugin locked.
   nsExec::ExecToLog 'taskkill /F /IM syncut.exe'
   nsExec::ExecToLog 'taskkill /F /IM kioworker.exe'
   nsExec::ExecToLog 'taskkill /F /IM kbuildsycoca6.exe'
@@ -30,9 +29,6 @@ UninstPage instfiles
 
 Section "Syncut"
   !insertmacro StopSyncutProcesses
-
-  ; Remove stale runtime files from older alpha builds before installing the
-  ; validated Qt/KDE/KIO/MLT runtime tree.
   RMDir /r "$INSTDIR"
   Sleep 300
   SetOutPath "$INSTDIR"
@@ -40,13 +36,10 @@ Section "Syncut"
 
   CreateDirectory "$SMPROGRAMS\Syncut"
 
-!if /FileExists "dist\Syncut\syncut.ico"
-  CreateShortcut "$SMPROGRAMS\Syncut\Syncut.lnk" "$INSTDIR\bin\syncut.exe" "" "$INSTDIR\syncut.ico" 0
-  CreateShortcut "$DESKTOP\Syncut.lnk" "$INSTDIR\bin\syncut.exe" "" "$INSTDIR\syncut.ico" 0
-!else
-  CreateShortcut "$SMPROGRAMS\Syncut\Syncut.lnk" "$INSTDIR\bin\syncut.exe"
-  CreateShortcut "$DESKTOP\Syncut.lnk" "$INSTDIR\bin\syncut.exe"
-!endif
+  ; Use syncut.exe's compiled multi-resolution icon for Windows shortcuts.
+  ; This avoids the tiny padded .ico that appeared in previous builds.
+  CreateShortcut "$SMPROGRAMS\Syncut\Syncut.lnk" "$INSTDIR\bin\syncut.exe" "" "$INSTDIR\bin\syncut.exe" 0
+  CreateShortcut "$DESKTOP\Syncut.lnk" "$INSTDIR\bin\syncut.exe" "" "$INSTDIR\bin\syncut.exe" 0
 
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
@@ -55,12 +48,7 @@ Section "Syncut"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "Publisher" "Syncut"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "UninstallString" '"$INSTDIR\Uninstall.exe"'
-
-!if /FileExists "dist\Syncut\syncut.ico"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayIcon" "$INSTDIR\syncut.ico"
-!else
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayIcon" "$INSTDIR\bin\syncut.exe"
-!endif
 SectionEnd
 
 Section "Uninstall"
