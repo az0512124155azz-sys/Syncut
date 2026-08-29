@@ -1,13 +1,15 @@
 Unicode true
-Name "Syncut Alpha 0.3"
-OutFile "Syncut-Alpha-0.3-Windows-x64-Setup.exe"
+Name "Syncut 0.3.1"
+OutFile "Syncut-0.3.1-Windows-x64-Setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\Syncut"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 SetOverwrite on
+SetShellVarContext current
 
 !if /FileExists "dist\Syncut\syncut.ico"
   Icon "dist\Syncut\syncut.ico"
+  UninstallIcon "dist\Syncut\syncut.ico"
 !endif
 
 Page directory
@@ -24,10 +26,11 @@ UninstPage instfiles
   nsExec::ExecToLog 'taskkill /F /IM melt-7.exe'
   nsExec::ExecToLog 'taskkill /F /IM ffmpeg.exe'
   nsExec::ExecToLog 'taskkill /F /IM ffprobe.exe'
+  nsExec::ExecToLog 'taskkill /F /IM ffplay.exe'
   Sleep 1200
 !macroend
 
-Section "Syncut"
+Section "Syncut" SecMain
   !insertmacro StopSyncutProcesses
   RMDir /r "$INSTDIR"
   Sleep 300
@@ -35,20 +38,25 @@ Section "Syncut"
   File /r "dist\Syncut\*.*"
 
   CreateDirectory "$SMPROGRAMS\Syncut"
-
-  ; Use syncut.exe's compiled multi-resolution icon for Windows shortcuts.
-  ; This avoids the tiny padded .ico that appeared in previous builds.
-  CreateShortcut "$SMPROGRAMS\Syncut\Syncut.lnk" "$INSTDIR\bin\syncut.exe" "" "$INSTDIR\bin\syncut.exe" 0
-  CreateShortcut "$DESKTOP\Syncut.lnk" "$INSTDIR\bin\syncut.exe" "" "$INSTDIR\bin\syncut.exe" 0
+!if /FileExists "dist\Syncut\syncut.ico"
+  CreateShortcut "$SMPROGRAMS\Syncut\Syncut.lnk" "$INSTDIR\bin\syncut.exe" "--no-welcome" "$INSTDIR\syncut.ico" 0
+  CreateShortcut "$DESKTOP\Syncut.lnk" "$INSTDIR\bin\syncut.exe" "--no-welcome" "$INSTDIR\syncut.ico" 0
+!else
+  CreateShortcut "$SMPROGRAMS\Syncut\Syncut.lnk" "$INSTDIR\bin\syncut.exe" "--no-welcome"
+  CreateShortcut "$DESKTOP\Syncut.lnk" "$INSTDIR\bin\syncut.exe" "--no-welcome"
+!endif
 
   WriteUninstaller "$INSTDIR\Uninstall.exe"
-
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayName" "Syncut Alpha 0.3"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayVersion" "0.3"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayName" "Syncut 0.3.1"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayVersion" "0.3.1"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "Publisher" "Syncut"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "UninstallString" '"$INSTDIR\Uninstall.exe"'
+!if /FileExists "dist\Syncut\syncut.ico"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayIcon" "$INSTDIR\syncut.ico"
+!else
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syncut" "DisplayIcon" "$INSTDIR\bin\syncut.exe"
+!endif
 SectionEnd
 
 Section "Uninstall"
