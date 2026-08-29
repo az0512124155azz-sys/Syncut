@@ -9,18 +9,30 @@ $oldPath = $env:PATH
 $oldMltPrefix = $env:MLT_PREFIX
 $oldMltRepository = $env:MLT_REPOSITORY
 $oldMltData = $env:MLT_DATA
+$oldMltProfilesPath = $env:MLT_PROFILES_PATH
 
 $env:PATH = "$bin;$env:SystemRoot\System32;$env:SystemRoot"
 $env:MLT_PREFIX = $Root
-$env:MLT_REPOSITORY = Join-Path $Root 'lib\mlt-7'
-$env:MLT_DATA = Join-Path $Root 'share\mlt-7'
+
+# Current packaged layout.
+$repo = Join-Path $Root 'lib\mlt'
+$data = Join-Path $Root 'share\mlt'
+if (-not (Test-Path -LiteralPath $repo)) { throw "MLT repository missing: $repo" }
+if (-not (Test-Path -LiteralPath $data)) { throw "MLT data missing: $data" }
+if (-not (Test-Path -LiteralPath (Join-Path $data 'profiles\dv_pal'))) {
+    throw 'MLT profile dv_pal is missing from the package.'
+}
+
+$env:MLT_REPOSITORY = $repo
+$env:MLT_DATA = $data
+$env:MLT_PROFILES_PATH = Join-Path $data 'profiles'
 
 try {
     $ffmpeg = Join-Path $bin 'ffmpeg.exe'
     $ffprobe = Join-Path $bin 'ffprobe.exe'
     $melt = Join-Path $bin 'melt.exe'
 
-    foreach ($exe in @($ffmpeg, $ffprobe, $melt)) {
+    foreach ($exe in @($ffmpeg,$ffprobe,$melt)) {
         if (-not (Test-Path -LiteralPath $exe)) {
             throw "Missing packaged tool: $exe"
         }
@@ -59,7 +71,6 @@ try {
     $probeOutput = & $ffprobe -v error -show_entries 'format=duration' -of json $sample 2>&1
     $probeExit = $LASTEXITCODE
     $probeText = ($probeOutput | Out-String).Trim()
-
     if ($probeExit -ne 0) {
         Write-Host $probeText
         throw "FFprobe inspection failed: $probeExit"
@@ -71,6 +82,9 @@ try {
     }
 
     Write-Host "FFprobe OK. Duration: $($probeObject.format.duration)"
+    Write-Host "MLT_REPOSITORY=$env:MLT_REPOSITORY"
+    Write-Host "MLT_DATA=$env:MLT_DATA"
+    Write-Host "MLT_PROFILES_PATH=$env:MLT_PROFILES_PATH"
 
     $mltOut = Join-Path $env:GITHUB_WORKSPACE 'melt-functional-out.log'
     $mltErr = Join-Path $env:GITHUB_WORKSPACE 'melt-functional-error.log'
@@ -78,7 +92,7 @@ try {
 
     $p = Start-Process `
         -FilePath $melt `
-        -ArgumentList @($sample, '-consumer', 'null', 'real_time=-1', 'terminate_on_pause=1') `
+        -ArgumentList @($sample,'-consumer','null','real_time=-1','terminate_on_pause=1') `
         -WorkingDirectory $bin `
         -Wait `
         -PassThru `
@@ -102,4 +116,5 @@ finally {
     $env:MLT_PREFIX = $oldMltPrefix
     $env:MLT_REPOSITORY = $oldMltRepository
     $env:MLT_DATA = $oldMltData
+    $env:MLT_PROFILES_PATH = $oldMltProfilesPath
 }
