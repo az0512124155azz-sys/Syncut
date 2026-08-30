@@ -31,6 +31,42 @@ foreach ($required in @($uiQrc,$mainWindow,$mainCpp,$coreCpp)) {
     }
 }
 
+
+# The versioned source archive can contain a truncated mainwindow.cpp. It
+# compiles but fails at the final linker step because MainWindow methods
+# declared by mainwindow.h have no definitions. The repository copy is the
+# maintained canonical source for this handoff.
+$repositoryRoot = Split-Path -Parent (Split-Path -Parent $SourceRoot)
+$canonicalMainWindow = Join-Path $repositoryRoot 'mainwindow.cpp'
+if (-not (Test-Path -LiteralPath $canonicalMainWindow)) {
+    throw "Canonical mainwindow.cpp is missing from the repository: $canonicalMainWindow"
+}
+
+$requiredMainWindowDefinitions = @(
+    'MainWindow::~MainWindow',
+    'MainWindow::slotFullScreen',
+    'MainWindow::configureNotifications',
+    'MainWindow::slotReloadEffects',
+    'MainWindow::finishUiSetup',
+    'MainWindow::slotConnectMonitors',
+    'MainWindow::buildGenerator',
+    'MainWindow::queryClose',
+    'MainWindow::saveProperties',
+    'MainWindow::saveNewToolbarConfig',
+    'MainWindow::loadBins'
+)
+$archiveMainWindow = Read-Text $mainWindow
+$missingMainWindowDefinitions = @($requiredMainWindowDefinitions | Where-Object { $archiveMainWindow -notmatch [regex]::Escape($_) })
+if ($missingMainWindowDefinitions.Count -gt 0) {
+    $canonicalText = Read-Text $canonicalMainWindow
+    $stillMissing = @($requiredMainWindowDefinitions | Where-Object { $canonicalText -notmatch [regex]::Escape($_) })
+    if ($stillMissing.Count -gt 0) {
+        throw "Canonical mainwindow.cpp is incomplete: $($stillMissing -join ', ')"
+    }
+    Write-Text -Path $mainWindow -Text $canonicalText
+    Write-Host "Restored complete MainWindow implementation before build: $($missingMainWindowDefinitions -join ', ')"
+}
+
 $qrc = Read-Text $uiQrc
 if ($qrc -notmatch '(?s)<qresource\s+prefix=["'']/kxmlgui5/syncut["'']>.*?syncutui\.rc.*?</qresource>') {
     $syncutBlock = @"
