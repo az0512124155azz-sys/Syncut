@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)][string]$Root,
     [Parameter(Mandatory = $true)][string]$Label,
     [int]$Seconds = 55
@@ -129,15 +129,24 @@ try {
         $process.Refresh()
 
         if ($process.HasExited) {
+            try { $process.WaitForExit() } catch {}
+            $exitCode = 'unknown'
+            try {
+                $process.Refresh()
+                $exitCode = [string]$process.ExitCode
+            } catch {}
+
+            Write-Host "===== Syncut STDOUT ====="
             if (Test-Path -LiteralPath $stdout) {
                 Get-Content -LiteralPath $stdout -Tail 400
             }
 
+            Write-Host "===== Syncut STDERR ====="
             if (Test-Path -LiteralPath $stderr) {
-                Get-Content -LiteralPath $stderr -Tail 800
+                Get-Content -LiteralPath $stderr -Tail 1200
             }
 
-            throw "$Label Syncut exited unexpectedly with code $($process.ExitCode)."
+            throw "$Label Syncut exited unexpectedly with code $exitCode."
         }
 
         $titles = [SyncutWindowInspectorV11]::TitlesForProcess($process.Id)
