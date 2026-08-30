@@ -153,11 +153,26 @@ jobs:
           test -f "$BUILD/build.ninja"
 
       - name: Compile Syncut editor
+        id: compile_syncut
+        continue-on-error: true
         shell: msys2 {0}
         run: |
           set -euo pipefail
           cmake --build "$GITHUB_WORKSPACE/build-windows" --target kdenlive -j2 2>&1 | tee "$GITHUB_WORKSPACE/compile-syncut.log"
           test -f "$GITHUB_WORKSPACE/build-windows/bin/syncut.exe"
+
+      - name: Inspect MainWindow symbols after compile
+        if: always()
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          LIB="$GITHUB_WORKSPACE/build-windows/lib/libkdenliveLib.a"
+          if [[ -f "$LIB" ]]; then
+            nm -C "$LIB" | grep -E 'MainWindow::(slotFullScreen|configureNotifications|slotReloadEffects|finishUiSetup|slotConnectMonitors|buildGenerator|queryClose|saveProperties|saveNewToolbarConfig|loadBins|~MainWindow)' | tee "$GITHUB_WORKSPACE/mainwindow-symbols.txt" || true
+          else
+            echo "libkdenliveLib.a was not produced" | tee "$GITHUB_WORKSPACE/mainwindow-symbols.txt"
+          fi
+          test "${{ steps.compile_syncut.outcome }}" = success
 
       - name: Compile renderer and thumbnail plugin
         shell: msys2 {0}
@@ -338,6 +353,7 @@ jobs:
           path: |
             runtime-versions.txt
             compile-syncut.log
+            mainwindow-symbols.txt
             compile-renderer.log
             compile-thumbnailer.log
             deploy-runtime.log
