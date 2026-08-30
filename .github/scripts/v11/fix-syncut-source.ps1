@@ -55,17 +55,17 @@ $requiredMainWindowDefinitions = @(
     'MainWindow::saveNewToolbarConfig',
     'MainWindow::loadBins'
 )
-$archiveMainWindow = Read-Text $mainWindow
-$missingMainWindowDefinitions = @($requiredMainWindowDefinitions | Where-Object { $archiveMainWindow -notmatch [regex]::Escape($_) })
-if ($missingMainWindowDefinitions.Count -gt 0) {
-    $canonicalText = Read-Text $canonicalMainWindow
-    $stillMissing = @($requiredMainWindowDefinitions | Where-Object { $canonicalText -notmatch [regex]::Escape($_) })
-    if ($stillMissing.Count -gt 0) {
-        throw "Canonical mainwindow.cpp is incomplete: $($stillMissing -join ', ')"
-    }
-    Write-Text -Path $mainWindow -Text $canonicalText
-    Write-Host "Restored complete MainWindow implementation before build: $($missingMainWindowDefinitions -join ', ')"
+$canonicalText = Read-Text $canonicalMainWindow
+$stillMissing = @($requiredMainWindowDefinitions | Where-Object { $canonicalText -notmatch [regex]::Escape($_) })
+if ($stillMissing.Count -gt 0) {
+    throw "Canonical mainwindow.cpp is incomplete: $($stillMissing -join ', ')"
 }
+
+# Always restore the canonical implementation. Function names can occur in
+# declarations and signal connections, so a text-presence check cannot prove
+# that the corresponding definitions are linked into the archive source.
+Write-Text -Path $mainWindow -Text $canonicalText
+Write-Host 'Restored canonical MainWindow implementation before build.'
 
 $qrc = Read-Text $uiQrc
 if ($qrc -notmatch '(?s)<qresource\s+prefix=["'']/kxmlgui5/syncut["'']>.*?syncutui\.rc.*?</qresource>') {
