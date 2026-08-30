@@ -151,15 +151,33 @@ test -f "$INSTALL/share/mlt/profiles/dv_pal" || { echo "ERROR: MLT profile dv_pa
 test -n "$(find "$INSTALL/lib/mlt" -maxdepth 1 -type f -iname 'libmlt*.dll' | head -1)" || { echo "ERROR: MLT modules missing"; exit 32; }
 test -n "$(find "$INSTALL/lib/frei0r-1" -maxdepth 1 -type f -iname '*.dll' | head -1)" || { echo "ERROR: Frei0r DLLs missing"; exit 33; }
 
-# Fail before GUI testing if ANY packaged MLT module still has an unresolved DLL.
+# Fail before GUI testing if any REAL packaged MLT dependency is unresolved.
+# MSYS2 ldd reports Windows API-set forwarders (api-ms-win-* / ext-ms-win-*)
+# as "not found". Those are supplied by Windows and are expected, so ignore
+# only those system forwarders while still failing on real DLLs such as
+# librtaudio-7.dll, librubberband-2.dll, libsox-3.dll, etc.
 unresolved=0
+
 while IFS= read -r module; do
-  missing="$(PATH="/ucrt64/bin:$BIN:$PATH" ldd "$module" 2>/dev/null | grep -i 'not found' || true)"
-  if [ -n "$missing" ]; then
-    echo "ERROR: unresolved MLT dependency: $module"
-    echo "$missing"
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+
+    dll="$(printf '%s\n' "$line" | awk '{print $1}')"
+
+    case "$dll" in
+      api-ms-win-*|ext-ms-win-*)
+        echo "SYSTEM API-SET (expected): $(basename "$module") -> $dll"
+        continue
+        ;;
+    esac
+
+    echo "ERROR: unresolved REAL MLT dependency: $module"
+    echo "$line"
     unresolved=1
-  fi
+  done < <(
+    PATH="/ucrt64/bin:$BIN:$PATH" ldd "$module" 2>/dev/null |
+    grep -i 'not found' || true
+  )
 done < <(find "$INSTALL/lib/mlt" -maxdepth 1 -type f -iname '*.dll' -print)
 
 [ "$unresolved" -eq 0 ] || exit 34
