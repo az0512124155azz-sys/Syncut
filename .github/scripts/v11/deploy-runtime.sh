@@ -64,6 +64,16 @@ for data_dir in applications icons mime kxmlgui6 knotifications6 kservices6 kser
   fi
 done
 
+# Keep application-owned data reachable through qt.conf Data=bin/data.
+# CMake installs Syncut/Kdenlive data under share/, while Qt/KF6 lookups in
+# the portable build resolve through bin/data. Mirror only application data.
+for app_data in kdenlive kxmlgui5 kxmlgui6; do
+  if [ -d "$INSTALL/share/$app_data" ]; then
+    mkdir -p "$BIN/data/$app_data"
+    cp -R -n "$INSTALL/share/$app_data"/. "$BIN/data/$app_data/"
+  fi
+done
+
 MELT_SRC=""
 for candidate in /ucrt64/bin/melt.exe /ucrt64/bin/melt-7.exe /ucrt64/bin/mlt-melt.exe; do
   if [ -f "$candidate" ]; then MELT_SRC="$candidate"; break; fi
@@ -151,33 +161,15 @@ test -f "$INSTALL/share/mlt/profiles/dv_pal" || { echo "ERROR: MLT profile dv_pa
 test -n "$(find "$INSTALL/lib/mlt" -maxdepth 1 -type f -iname 'libmlt*.dll' | head -1)" || { echo "ERROR: MLT modules missing"; exit 32; }
 test -n "$(find "$INSTALL/lib/frei0r-1" -maxdepth 1 -type f -iname '*.dll' | head -1)" || { echo "ERROR: Frei0r DLLs missing"; exit 33; }
 
-# Fail before GUI testing if any REAL packaged MLT dependency is unresolved.
-# MSYS2 ldd reports Windows API-set forwarders (api-ms-win-* / ext-ms-win-*)
-# as "not found". Those are supplied by Windows and are expected, so ignore
-# only those system forwarders while still failing on real DLLs such as
-# librtaudio-7.dll, librubberband-2.dll, libsox-3.dll, etc.
+# Fail before GUI testing if ANY packaged MLT module still has an unresolved DLL.
 unresolved=0
-
 while IFS= read -r module; do
-  while IFS= read -r line; do
-    [ -z "$line" ] && continue
-
-    dll="$(printf '%s\n' "$line" | awk '{print $1}')"
-
-    case "$dll" in
-      api-ms-win-*|ext-ms-win-*)
-        echo "SYSTEM API-SET (expected): $(basename "$module") -> $dll"
-        continue
-        ;;
-    esac
-
-    echo "ERROR: unresolved REAL MLT dependency: $module"
-    echo "$line"
+  missing="$(PATH="/ucrt64/bin:$BIN:$PATH" ldd "$module" 2>/dev/null | grep -i 'not found' || true)"
+  if [ -n "$missing" ]; then
+    echo "ERROR: unresolved MLT dependency: $module"
+    echo "$missing"
     unresolved=1
-  done < <(
-    PATH="/ucrt64/bin:$BIN:$PATH" ldd "$module" 2>/dev/null |
-    grep -i 'not found' || true
-  )
+  fi
 done < <(find "$INSTALL/lib/mlt" -maxdepth 1 -type f -iname '*.dll' -print)
 
 [ "$unresolved" -eq 0 ] || exit 34

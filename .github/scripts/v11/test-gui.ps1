@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)][string]$Root,
     [Parameter(Mandatory = $true)][string]$Label,
     [int]$Seconds = 55
@@ -121,7 +121,7 @@ $seenTitles = New-Object System.Collections.Generic.List[string]
 
 # ASCII only on purpose for Windows PowerShell 5.1 compatibility.
 $badWindowPattern = '(?i)Welcome to Kdenlive|Kdenlive Quick Setup|Syncut setup|\berror\b|\bfatal\b|\bcrash\b|\bcritical\b'
-$fatalLogPattern = '(?i)Unknown protocol.*file|Unable to create KIO worker|Could not load the Qt platform plugin|failed to load.*qml|This application failed to start|Missing package.*Frei0r|no plugins found.*mlt|Failed to open properties file.*profiles|invalid filter.*frei0r'
+$fatalLogPattern = '(?i)Unknown protocol.*file|Unable to create KIO worker|Could not load the Qt platform plugin|failed to load.*qml|This application failed to start|Missing package.*Frei0r|no plugins found.*mlt|Failed to open properties file.*profiles|invalid filter.*frei0r|cannot find \.rc file \"syncutui\.rc\"|Syncut XMLGUI did not create'
 
 try {
     while ((Get-Date) -lt $deadline) {

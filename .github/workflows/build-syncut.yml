@@ -367,3 +367,10 @@ jobs:
             Syncut-0.3.1-Windows-x64-Portable.zip
           if-no-files-found: error
           retention-days: 14
+
+      - name: Patch Syncut startup and XMLGUI
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & '.\.github\scripts\v11\fix-syncut-source.ps1' `
+            -SourceRoot (Join-Path $env:GITHUB_WORKSPACE 'source\Syncut-Claude-Handoff')
