@@ -62,6 +62,13 @@ jobs:
         run: |
           & '.\.github\scripts\v11\validate-source.ps1' -Archive 'syncut-source.zip' -Destination 'source'
 
+      - name: Patch Syncut startup and XMLGUI
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & '.\.github\scripts\v11\fix-syncut-source.ps1' `
+            -SourceRoot (Join-Path $env:GITHUB_WORKSPACE 'source\Syncut-Claude-Handoff')
+
       - name: Setup MSYS2 UCRT64
         uses: msys2/setup-msys2@v2
         with:
@@ -367,10 +374,3 @@ jobs:
             Syncut-0.3.1-Windows-x64-Portable.zip
           if-no-files-found: error
           retention-days: 14
-
-      - name: Patch Syncut startup and XMLGUI
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          & '.\.github\scripts\v11\fix-syncut-source.ps1' `
-            -SourceRoot (Join-Path $env:GITHUB_WORKSPACE 'source\Syncut-Claude-Handoff')

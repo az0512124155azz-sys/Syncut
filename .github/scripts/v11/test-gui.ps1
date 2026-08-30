@@ -1,4 +1,4 @@
-﻿param(
+param(
     [Parameter(Mandatory = $true)][string]$Root,
     [Parameter(Mandatory = $true)][string]$Label,
     [int]$Seconds = 55
