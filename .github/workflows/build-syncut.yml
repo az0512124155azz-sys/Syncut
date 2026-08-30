@@ -80,6 +80,9 @@ jobs:
             mingw-w64-ucrt-x86_64-mlt
             mingw-w64-ucrt-x86_64-ffmpeg
             mingw-w64-ucrt-x86_64-frei0r-plugins
+            mingw-w64-ucrt-x86_64-rtaudio
+            mingw-w64-ucrt-x86_64-rubberband
+            mingw-w64-ucrt-x86_64-sox
             mingw-w64-ucrt-x86_64-kio
             mingw-w64-ucrt-x86_64-kservice
             mingw-w64-ucrt-x86_64-qt6-tools
@@ -99,6 +102,9 @@ jobs:
               mingw-w64-ucrt-x86_64-mlt \
               mingw-w64-ucrt-x86_64-ffmpeg \
               mingw-w64-ucrt-x86_64-frei0r-plugins \
+              mingw-w64-ucrt-x86_64-rtaudio \
+              mingw-w64-ucrt-x86_64-rubberband \
+              mingw-w64-ucrt-x86_64-sox \
               mingw-w64-ucrt-x86_64-kio \
               mingw-w64-ucrt-x86_64-kservice \
               mingw-w64-ucrt-x86_64-qt6-base
