@@ -132,6 +132,26 @@ QAction *officialCut = actionCollection()->action(KStandardAction::name(KStandar
 }
 Write-Text -Path $mainWindow -Text $mw
 
+# Compile the restored implementation under a distinct source name. This avoids
+# the corrupted archive translation-unit path that produced unresolved
+# MainWindow symbols while preserving the original source for diagnostics.
+$cmakeLists = Join-Path $SourceRoot 'src\CMakeLists.txt'
+$completeMainWindow = Join-Path $SourceRoot 'src\mainwindow_complete.cpp'
+if (-not (Test-Path -LiteralPath $cmakeLists)) {
+    throw "Required CMake file is missing: $cmakeLists"
+}
+Write-Text -Path $completeMainWindow -Text $mw
+$cmakeText = Read-Text $cmakeLists
+$sourceLine = '    mainwindow.cpp'
+$completeLine = '    mainwindow_complete.cpp'
+if ($cmakeText.Contains($sourceLine) -and -not $cmakeText.Contains($completeLine)) {
+    $cmakeText = $cmakeText.Replace($sourceLine, $completeLine)
+    Write-Text -Path $cmakeLists -Text $cmakeText
+    Write-Host 'Selected the restored MainWindow implementation as an explicit CMake source.'
+} elseif (-not $cmakeText.Contains($completeLine)) {
+    throw 'Could not select mainwindow_complete.cpp in CMake.'
+}
+
 foreach ($path in @($mainCpp,$coreCpp)) {
     $text = Read-Text $path
     $text = $text.Replace(':/kxmlgui5/kdenlive/kdenliveui.rc', ':/kxmlgui5/syncut/syncutui.rc')
