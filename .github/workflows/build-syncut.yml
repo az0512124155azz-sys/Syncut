@@ -80,9 +80,19 @@ jobs:
             mingw-w64-ucrt-x86_64-mlt
             mingw-w64-ucrt-x86_64-ffmpeg
             mingw-w64-ucrt-x86_64-frei0r-plugins
+            mingw-w64-ucrt-x86_64-fftw
+            mingw-w64-ucrt-x86_64-gdk-pixbuf2
+            mingw-w64-ucrt-x86_64-libebur128
+            mingw-w64-ucrt-x86_64-libsamplerate
+            mingw-w64-ucrt-x86_64-libvorbis
+            mingw-w64-ucrt-x86_64-pango
+            mingw-w64-ucrt-x86_64-qt6-5compat
+            mingw-w64-ucrt-x86_64-qt6-svg
             mingw-w64-ucrt-x86_64-rtaudio
             mingw-w64-ucrt-x86_64-rubberband
+            mingw-w64-ucrt-x86_64-rnnoise
             mingw-w64-ucrt-x86_64-sox
+            mingw-w64-ucrt-x86_64-vid.stab
             mingw-w64-ucrt-x86_64-kio
             mingw-w64-ucrt-x86_64-kservice
             mingw-w64-ucrt-x86_64-qt6-tools
@@ -102,9 +112,19 @@ jobs:
               mingw-w64-ucrt-x86_64-mlt \
               mingw-w64-ucrt-x86_64-ffmpeg \
               mingw-w64-ucrt-x86_64-frei0r-plugins \
+              mingw-w64-ucrt-x86_64-fftw \
+              mingw-w64-ucrt-x86_64-gdk-pixbuf2 \
+              mingw-w64-ucrt-x86_64-libebur128 \
+              mingw-w64-ucrt-x86_64-libsamplerate \
+              mingw-w64-ucrt-x86_64-libvorbis \
+              mingw-w64-ucrt-x86_64-pango \
+              mingw-w64-ucrt-x86_64-qt6-5compat \
+              mingw-w64-ucrt-x86_64-qt6-svg \
               mingw-w64-ucrt-x86_64-rtaudio \
               mingw-w64-ucrt-x86_64-rubberband \
+              mingw-w64-ucrt-x86_64-rnnoise \
               mingw-w64-ucrt-x86_64-sox \
+              mingw-w64-ucrt-x86_64-vid.stab \
               mingw-w64-ucrt-x86_64-kio \
               mingw-w64-ucrt-x86_64-kservice \
               mingw-w64-ucrt-x86_64-qt6-base
