@@ -74,7 +74,6 @@ jobs:
         with:
           msystem: UCRT64
           update: true
-          release: false
           path-type: inherit
           install: >-
             git
@@ -109,7 +108,7 @@ jobs:
             mingw-w64-ucrt-x86_64-gdb
 
       - name: Record exact runtime versions
-        shell: msys2 {0}
+        shell: C:/msys64/usr/bin/bash.exe -eo pipefail '{0}'
         run: |
           set -euo pipefail
           {
@@ -140,7 +139,7 @@ jobs:
           } | tee "$GITHUB_WORKSPACE/runtime-versions.txt"
 
       - name: Configure CMake
-        shell: msys2 {0}
+        shell: C:/msys64/usr/bin/bash.exe -eo pipefail '{0}'
         run: |
           set -euo pipefail
           SRC="$GITHUB_WORKSPACE/source/Syncut-Claude-Handoff"
@@ -157,7 +156,7 @@ jobs:
       - name: Compile Syncut editor
         id: compile_syncut
         continue-on-error: true
-        shell: msys2 {0}
+        shell: C:/msys64/usr/bin/bash.exe -eo pipefail '{0}'
         run: |
           set -euo pipefail
           cmake --build "$GITHUB_WORKSPACE/build-windows" --target kdenlive -j2 2>&1 | tee "$GITHUB_WORKSPACE/compile-syncut.log"
@@ -165,7 +164,7 @@ jobs:
 
       - name: Inspect MainWindow symbols after compile
         if: always()
-        shell: msys2 {0}
+        shell: C:/msys64/usr/bin/bash.exe -eo pipefail '{0}'
         run: |
           set -euo pipefail
           LIB="$GITHUB_WORKSPACE/build-windows/lib/libkdenliveLib.a"
@@ -177,7 +176,7 @@ jobs:
           test "${{ steps.compile_syncut.outcome }}" = success
 
       - name: Compile renderer and thumbnail plugin
-        shell: msys2 {0}
+        shell: C:/msys64/usr/bin/bash.exe -eo pipefail '{0}'
         run: |
           set -euo pipefail
           BUILD="$GITHUB_WORKSPACE/build-windows"
@@ -187,7 +186,7 @@ jobs:
           test -n "$(find "$BUILD" -type f -iname 'mltpreview.dll' | head -1)"
 
       - name: Install compiled application
-        shell: msys2 {0}
+        shell: C:/msys64/usr/bin/bash.exe -eo pipefail '{0}'
         run: |
           set -euo pipefail
           cmake --install "$GITHUB_WORKSPACE/build-windows"
@@ -195,12 +194,12 @@ jobs:
           test -f "$GITHUB_WORKSPACE/dist/Syncut/bin/kdenlive_render.exe"
 
       - name: Build independent KIO file protocol probe
-        shell: msys2 {0}
+        shell: C:/msys64/usr/bin/bash.exe -eo pipefail '{0}'
         run: |
           bash "$GITHUB_WORKSPACE/.github/scripts/v11/build-kio-probe.sh"
 
       - name: Deploy complete portable runtime
-        shell: msys2 {0}
+        shell: C:/msys64/usr/bin/bash.exe -eo pipefail '{0}'
         run: |
           bash "$GITHUB_WORKSPACE/.github/scripts/v11/deploy-runtime.sh" 2>&1 | tee "$GITHUB_WORKSPACE/deploy-runtime.log"
 
@@ -335,7 +334,7 @@ jobs:
       - name: Capture crash backtrace after GUI failure
         if: failure() && (steps.portable_smoke.outcome == 'failure' || steps.installed_smoke.outcome == 'failure' || steps.upgrade_smoke.outcome == 'failure')
         continue-on-error: true
-        shell: msys2 {0}
+        shell: C:/msys64/usr/bin/bash.exe -eo pipefail '{0}'
         run: |
           INSTALL="$GITHUB_WORKSPACE/dist/Syncut"
           cd "$INSTALL/bin"
