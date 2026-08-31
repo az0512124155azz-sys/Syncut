@@ -32,16 +32,6 @@ foreach ($required in @($uiQrc,$mainWindow,$mainCpp,$coreCpp)) {
 }
 
 
-# The versioned source archive can contain a truncated mainwindow.cpp. It
-# compiles but fails at the final linker step because MainWindow methods
-# declared by mainwindow.h have no definitions. The repository copy is the
-# maintained canonical source for this handoff.
-$repositoryRoot = Split-Path -Parent (Split-Path -Parent $SourceRoot)
-$canonicalMainWindow = Join-Path $repositoryRoot 'mainwindow.cpp'
-if (-not (Test-Path -LiteralPath $canonicalMainWindow)) {
-    throw "Canonical mainwindow.cpp is missing from the repository: $canonicalMainWindow"
-}
-
 $requiredMainWindowDefinitions = @(
     'MainWindow::~MainWindow',
     'MainWindow::slotFullScreen',
@@ -55,17 +45,16 @@ $requiredMainWindowDefinitions = @(
     'MainWindow::saveNewToolbarConfig',
     'MainWindow::loadBins'
 )
-$canonicalText = Read-Text $canonicalMainWindow
-$stillMissing = @($requiredMainWindowDefinitions | Where-Object { $canonicalText -notmatch [regex]::Escape($_) })
+$mainWindowText = Read-Text $mainWindow
+$stillMissing = @($requiredMainWindowDefinitions | Where-Object { $mainWindowText -notmatch [regex]::Escape($_) })
 if ($stillMissing.Count -gt 0) {
-    throw "Canonical mainwindow.cpp is incomplete: $($stillMissing -join ', ')"
+    throw "Archive src/mainwindow.cpp is incomplete: $($stillMissing -join ', ')"
 }
 
-# Always restore the canonical implementation. Function names can occur in
-# declarations and signal connections, so a text-presence check cannot prove
-# that the corresponding definitions are linked into the archive source.
-Write-Text -Path $mainWindow -Text $canonicalText
-Write-Host 'Restored canonical MainWindow implementation before build.'
+# Keep the archive's src/mainwindow.cpp. The repository-root copy is a
+# truncated handoff artifact and replacing this file with it causes linker
+# failures for the MainWindow methods above.
+Write-Host 'Using archive src/mainwindow.cpp; skipped truncated repository-root copy.'
 
 $qrc = Read-Text $uiQrc
 if ($qrc -notmatch '(?s)<qresource\s+prefix=["'']/kxmlgui5/syncut["'']>.*?syncutui\.rc.*?</qresource>') {
