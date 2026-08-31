@@ -74,6 +74,7 @@ jobs:
         with:
           msystem: UCRT64
           update: true
+          path-type: inherit
           install: >-
             git
             make
