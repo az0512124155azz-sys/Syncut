@@ -137,6 +137,11 @@ if ($cmakeText -match '(?m)^\s*mainwindow_complete\.cpp\s*$') {
     throw 'CMakeLists.txt must compile mainwindow.cpp.'
 }
 Write-Host 'Keeping canonical mainwindow.cpp enabled for Qt automoc and linking.'
+$wholeArchiveOption = 'target_link_options(kdenlive PRIVATE "-Wl,--whole-archive" "$<TARGET_FILE:kdenliveLib>" "-Wl,--no-whole-archive")'
+if ($cmakeText -notmatch 'TARGET_FILE:kdenliveLib') {
+    Add-Content -LiteralPath $cmakeLists -Value ("`n# Ensure all MainWindow QObject symbols are extracted from the static archive.`n$wholeArchiveOption`n")
+    Write-Host 'Enabled whole-archive extraction for kdenliveLib.'
+}
 
 foreach ($path in @($mainCpp,$coreCpp)) {
     $text = Read-Text $path
