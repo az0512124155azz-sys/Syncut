@@ -129,8 +129,12 @@ if (-not (Test-Path -LiteralPath $cmakeLists)) {
     throw "Required CMake file is missing: $cmakeLists"
 }
 $cmakeText = Read-Text $cmakeLists
-if ($cmakeText -notmatch '(?m)^\s*mainwindow\.cpp\s*$') {
-    throw 'CMakeLists.txt must compile the canonical mainwindow.cpp translation unit.'
+if ($cmakeText -match '(?m)^\s*mainwindow_complete\.cpp\s*$') {
+    $cmakeText = $cmakeText -replace '(?m)^\s*mainwindow_complete\.cpp\s*$', '    mainwindow.cpp'
+    Write-Text -Path $cmakeLists -Text $cmakeText
+    Write-Host 'Normalized CMakeLists.txt back to mainwindow.cpp.'
+} elseif ($cmakeText -notmatch '(?m)^\s*mainwindow\.cpp\s*$') {
+    throw 'CMakeLists.txt must compile mainwindow.cpp.'
 }
 Write-Host 'Keeping canonical mainwindow.cpp enabled for Qt automoc and linking.'
 
