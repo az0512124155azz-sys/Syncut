@@ -171,7 +171,8 @@ $linkMainWindow = Join-Path $SourceRoot 'src\mainwindow_link.cpp'
 Copy-Item -LiteralPath $mainWindow -Destination $linkMainWindow -Force
 $cmakeText = Read-Text $cmakeLists
 if ($cmakeText -notmatch 'target_sources\(kdenlive PRIVATE mainwindow_link\.cpp') {
-    Add-Content -LiteralPath $cmakeLists -Value 'target_sources(kdenlive PRIVATE mainwindow_link.cpp)'
+    $cmakeSource = $linkMainWindow.Replace('\\','/')
+    Add-Content -LiteralPath $cmakeLists -Value ("target_sources(kdenlive PRIVATE '$cmakeSource')")
 }
 
 $qrcCheck = Read-Text $uiQrc
