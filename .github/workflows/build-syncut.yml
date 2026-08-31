@@ -391,3 +391,5 @@ jobs:
             Syncut-0.3.1-Windows-x64-Portable.zip
           if-no-files-found: error
           retention-days: 14
+
+# Ensure pacman is resolved inside direct MSYS2 bash shell.
