@@ -115,6 +115,399 @@ jobs:
             echo "gcc=$(gcc --version | head -1)"
             echo "cmake=$(cmake --version | head -1)"
             echo "ninja=$(ninja --version)"
+            /usr/bin/pacman -Q \
+              mingw-w64-ucrt-x86_64-kdenlive \
+              mingw-w64-ucrt-x86_64-mlt \
+              mingw-w64-ucrt-x86_64-ffmpeg \
+              mingw-w64-ucrt-x86_64-frei0r-plugins \
+              mingw-w64-ucrt-x86_64-fftw \
+              mingw-w64-ucrt-x86_64-gdk-pixbuf2 \
+              mingw-w64-ucrt-x86_64-libebur128 \
+              mingw-w64-ucrt-x86_64-libsamplerate \
+              mingw-w64-ucrt-x86_64-libvorbis \
+              mingw-w64-ucrt-x86_64-pango \
+              mingw-w64-ucrt-x86_64-qt6-5compat \
+              mingw-w64-ucrt-x86_64-qt6-svg \
+              mingw-w64-ucrt-x86_64-rtaudio \
+              mingw-w64-ucrt-x86_64-rubberband \
+              mingw-w64-ucrt-x86_64-rnnoise \
+              mingw-w64-ucrt-x86_64-sox \
+              mingw-w64-ucrt-x86_64-vid.stab \
+              mingw-w64-ucrt-x86_64-kio \
+              mingw-w64-ucrt-x86_64-kservice \
+              mingw-w64-ucrt-x86_64-qt6-base
+          } | tee "$GITHUB_WORKSPACE/runtime-versions.txt"
+
+      - name: Configure CMake
+        shell: C:/msys64/usr/bin/bash.exe -eo pipefail '{0}'
+        run: |
+          set -euo pipefail
+          SRC="$GITHUB_WORKSPACE/source/Syncut-Claude-Handoff"
+          BUILD="$GITHUB_WORKSPACE/build-windows"
+          INSTALL="$GITHUB_WORKSPACE/dist/Syncut"
+          rm -rf "$BUILD" "$INSTALL"
+          mkdir -p "$BUILD" "$INSTALL"
+          cmake -S "$SRC" -B "$BUILD" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$INSTALL" \
+            -DBUILD_TESTING=OFF
+          test -f "$BUILD/build.ninja"
+
+      - name: Compile Syncut editor
+        id: compile_syncut
+        continue-on-error: true
+        shell: C:/msys64/usr/bin/bash.exe -eo pipefail '{0}'
+        run: |
+          set -euo pipefail
+          cmake --build "$GITHUB_WORKSPACE/build-windows" --target kdenlive -j2 2>&1 | tee "$GITHUB_WORKSPACE/compile-syncut.log"
+          test -f "$GITHUB_WORKSPACE/build-windows/bin/syncut.exe"
+
+      - name: Inspect MainWindow symbols after compile
+        if: always()
+        shell: C:/msys64/usr/bin/bash.exe -eo pipefail '{0}'
+        run: |
+          set -euo pipefail
+          LIB="$GITHUB_WORKSPACE/build-windows/lib/libkdenliveLib.a"
+          if [[ -f "$LIB" ]]; then
+            nm -C "$LIB" | grep -E 'MainWindow::(slotFullScreen|configureNotifications|slotReloadEffects|finishUiSetup|slotConnectMonitors|buildGenerator|queryClose|saveProperties|saveNewToolbarConfig|loadBins|~MainWindow)' | tee "$GITHUB_WORKSPACE/mainwindow-symbols.txt" || true
+          else
+            echo "libkdenliveLib.a was not produced" | tee "$GITHUB_WORKSPACE/mainwindow-symbols.txt"
+          fi
+          test "${{ steps.compile_syncut.outcome }}" = success
+
+      - name: Compile renderer and thumbnail plugin
+        shell: C:/msys64/usr/bin/bash.exe -eo pipefail '{0}'
+        run: |
+          set -euo pipefail
+          BUILD="$GITHUB_WORKSPACE/build-windows"
+          cmake --build "$BUILD" --target kdenlive_render -j2 2>&1 | tee "$GITHUB_WORKSPACE/compile-renderer.log"
+          cmake --build "$BUILD" --target mltpreview -j2 2>&1 | tee "$GITHUB_WORKSPACE/compile-thumbnailer.log"
+          test -f "$BUILD/bin/kdenlive_render.exe"
+          test -n "$(find "$BUILD" -type f -iname 'mltpreview.dll' | head -1)"
+
+      - name: Install compiled application
+        shell: C:/msys64/usr/bin/bash.exe -eo pipefail '{0}'
+        run: |
+          set -euo pipefail
+          cmake --install "$GITHUB_WORKSPACE/build-windows"
+          test -f "$GITHUB_WORKSPACE/dist/Syncut/bin/syncut.exe"
+          test -f "$GITHUB_WORKSPACE/dist/Syncut/bin/kdenlive_render.exe"
+
+      - name: Build independent KIO file protocol probe
+        shell: C:/msys64/usr/bin/bash.exe -eo pipefail '{0}'
+        run: |
+          bash "$GITHUB_WORKSPACE/.github/scripts/v11/build-kio-probe.sh"
+
+      - name: Deploy complete portable runtime
+        shell: C:/msys64/usr/bin/bash.exe -eo pipefail '{0}'
+        run: |
+          bash "$GITHUB_WORKSPACE/.github/scripts/v11/deploy-runtime.sh" 2>&1 | tee "$GITHUB_WORKSPACE/deploy-runtime.log"
+
+      - name: Validate portable runtime inventory
+        shell: powershell
+        run: |
+          & '.\.github\scripts\v11\test-runtime-inventory.ps1' -Root (Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut') -Label 'portable'
+
+      - name: Test portable KIO file protocol
+        shell: powershell
+        run: |
+          & '.\.github\scripts\v11\test-kio-probe.ps1' `
+            -Root (Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut') `
+            -ProbeSource (Join-Path $env:GITHUB_WORKSPACE 'kio-probe-build\syncut-kio-probe.exe') `
+            -Label 'portable'
+
+      - name: Test portable FFmpeg MLT and Frei0r
+        shell: powershell
+        run: |
+          & '.\.github\scripts\v11\test-media-runtime.ps1' -Root (Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut') -Label 'portable'
+
+      - name: Smoke test portable editor GUI
+        id: portable_smoke
+        shell: powershell
+        run: |
+          & '.\.github\scripts\v11\test-gui.ps1' -Root (Join-Path $env:GITHUB_WORKSPACE 'dist\Syncut') -Label 'portable' -Seconds 55
+
+      - name: Create portable ZIP
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Compress-Archive -Path 'dist\Syncut\*' -DestinationPath 'Syncut-0.3.1-Windows-x64-Portable.zip' -Force
+          $zip = Get-Item -LiteralPath 'Syncut-0.3.1-Windows-x64-Portable.zip'
+          if ($zip.Length -lt 30000000) { throw "Portable ZIP is unexpectedly small: $($zip.Length)" }
+
+      - name: Install NSIS
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install nsis -y --no-progress
+          $candidates = @(
+            "$env:ProgramFiles\NSIS\makensis.exe",
+            "${env:ProgramFiles(x86)}\NSIS\makensis.exe",
+            'C:\ProgramData\chocolatey\bin\makensis.exe'
+          )
+          $makensis = $candidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+          if (-not $makensis) {
+            $cmd = Get-Command 'makensis.exe' -ErrorAction SilentlyContinue
+            if ($cmd) { $makensis = $cmd.Source }
+          }
+          if (-not $makensis) { throw 'makensis.exe not found' }
+          "MAKENSIS=$makensis" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Create Windows installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & $env:MAKENSIS 'installer.nsi'
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed: $LASTEXITCODE" }
+          $setup = Get-Item -LiteralPath 'Syncut-0.3.1-Windows-x64-Setup.exe'
+          if ($setup.Length -lt 30000000) { throw "Installer is unexpectedly small: $($setup.Length)" }
+
+      - name: Silent install real installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:LOCALAPPDATA 'Programs\Syncut'
+          if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+          $process = Start-Process -FilePath (Resolve-Path 'Syncut-0.3.1-Windows-x64-Setup.exe') -ArgumentList '/S' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Silent installer failed: $($process.ExitCode)" }
+
+      - name: Validate installed runtime inventory
+        shell: powershell
+        run: |
+          & '.\.github\scripts\v11\test-runtime-inventory.ps1' -Root (Join-Path $env:LOCALAPPDATA 'Programs\Syncut') -Label 'installed'
+
+      - name: Test installed KIO file protocol
+        shell: powershell
+        run: |
+          & '.\.github\scripts\v11\test-kio-probe.ps1' `
+            -Root (Join-Path $env:LOCALAPPDATA 'Programs\Syncut') `
+            -ProbeSource (Join-Path $env:GITHUB_WORKSPACE 'kio-probe-build\syncut-kio-probe.exe') `
+            -Label 'installed'
+
+      - name: Test installed FFmpeg MLT and Frei0r
+        shell: powershell
+        run: |
+          & '.\.github\scripts\v11\test-media-runtime.ps1' -Root (Join-Path $env:LOCALAPPDATA 'Programs\Syncut') -Label 'installed'
+
+      - name: Smoke test installed editor GUI
+        id: installed_smoke
+        shell: powershell
+        run: |
+          & '.\.github\scripts\v11\test-gui.ps1' -Root (Join-Path $env:LOCALAPPDATA 'Programs\Syncut') -Label 'installed' -Seconds 55
+
+      - name: Reinstall over a running copy and validate recovery
+        id: upgrade_smoke
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:LOCALAPPDATA 'Programs\Syncut'
+          $exe = Join-Path $root 'bin\syncut.exe'
+          $running = Start-Process -FilePath $exe -ArgumentList '--no-welcome' -WorkingDirectory (Join-Path $root 'bin') -PassThru
+          Start-Sleep -Seconds 12
+          $running.Refresh()
+          if ($running.HasExited) { throw 'Syncut exited before the upgrade test.' }
+          $installer = Start-Process -FilePath (Resolve-Path 'Syncut-0.3.1-Windows-x64-Setup.exe') -ArgumentList '/S' -Wait -PassThru
+          if ($installer.ExitCode -ne 0) { throw "Upgrade installer failed: $($installer.ExitCode)" }
+          Start-Sleep -Seconds 2
+          $running.Refresh()
+          if (-not $running.HasExited) {
+            Stop-Process -Id $running.Id -Force -ErrorAction SilentlyContinue
+            throw 'Installer did not close the running Syncut process.'
+          }
+          & '.\.github\scripts\v11\test-runtime-inventory.ps1' -Root $root -Label 'after-upgrade'
+          & '.\.github\scripts\v11\test-kio-probe.ps1' -Root $root -ProbeSource (Join-Path $env:GITHUB_WORKSPACE 'kio-probe-build\syncut-kio-probe.exe') -Label 'after-upgrade'
+          & '.\.github\scripts\v11\test-media-runtime.ps1' -Root $root -Label 'after-upgrade'
+          & '.\.github\scripts\v11\test-gui.ps1' -Root $root -Label 'after-upgrade' -Seconds 35
+
+      - name: Validate uninstaller
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:LOCALAPPDATA 'Programs\Syncut'
+          $uninstall = Join-Path $root 'Uninstall.exe'
+          if (-not (Test-Path -LiteralPath $uninstall)) { throw 'Uninstaller is missing.' }
+          $process = Start-Process -FilePath $uninstall -ArgumentList '/S' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Uninstaller failed: $($process.ExitCode)" }
+          Start-Sleep -Seconds 2
+          if (Test-Path -LiteralPath (Join-Path $root 'bin\syncut.exe')) { throw 'Uninstaller left syncut.exe behind.' }
+
+      - name: Capture crash backtrace after GUI failure
+        if: failure() && (steps.portable_smoke.outcome == 'failure' || steps.installed_smoke.outcome == 'failure' || steps.upgrade_smoke.outcome == 'failure')
+        continue-on-error: true
+        shell: C:/msys64/usr/bin/bash.exe -eo pipefail '{0}'
+        run: |
+          INSTALL="$GITHUB_WORKSPACE/dist/Syncut"
+          cd "$INSTALL/bin"
+          export PATH="$INSTALL/bin:/ucrt64/bin:$PATH"
+          export MLT_PREFIX="$INSTALL"
+          export MLT_REPOSITORY="$INSTALL/lib/mlt"
+          export MLT_DATA="$INSTALL/share/mlt"
+          export MLT_PROFILES_PATH="$INSTALL/share/mlt/profiles"
+          export FREI0R_PATH="$INSTALL/lib/frei0r-1"
+          timeout 60s gdb -batch -ex 'set pagination off' -ex run -ex 'thread apply all bt full' --args "$INSTALL/bin/syncut.exe" --no-welcome > "$GITHUB_WORKSPACE/syncut-gdb.txt" 2>&1 || true
+
+      - name: Upload diagnostics always
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Syncut-v11-Diagnostics
+          path: |
+            runtime-versions.txt
+            compile-syncut.log
+            mainwindow-symbols.txt
+            compile-renderer.log
+            compile-thumbnailer.log
+            deploy-runtime.log
+            kio-probe-*-out.log
+            kio-probe-*-err.log
+            melt-*-out.log
+            melt-*-error.log
+            syncut-*-out.log
+            syncut-*-err.log
+            syncut-*-windows.log
+            syncut-gdb.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload raw binaries always
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Syncut-v11-Raw-Binaries
+          path: |
+            build-windows/bin/syncut.exe
+            build-windows/bin/kdenlive_render.exe
+            build-windows/**/mltpreview.dll
+            kio-probe-build/syncut-kio-probe.exe
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload final validated packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: Syncut-v11-VALIDATED-Windows
+          path: |
+            Syncut-0.3.1-Windows-x64-Setup.exe
+            Syncut-0.3.1-Windows-x64-Portable.zip
+          if-no-files-found: error
+          retention-days: 14
+name: Build Syncut Windows - v11 Stable Recovery
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'syncut-source.part*'
+      - 'syncut-source.sha256'
+      - '.github/workflows/build-syncut.yml'
+      - '.github/scripts/v11/**'
+      - 'installer.nsi'
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate CI helper syntax
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem '.github\scripts\v11' -Filter '*.ps1' -File | ForEach-Object {
+            $null = [scriptblock]::Create((Get-Content -LiteralPath $_.FullName -Raw))
+            Write-Host "PowerShell syntax OK: $($_.Name)"
+          }
+          Get-ChildItem '.github\scripts\v11' -Filter '*.sh' -File | ForEach-Object {
+            & 'C:\Program Files\Git\bin\bash.exe' -n $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Shell syntax error: $($_.Name)" }
+            Write-Host "Bash syntax OK: $($_.Name)"
+          }
+
+      - name: Reconstruct and verify source archive
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $parts = @('syncut-source.part01','syncut-source.part02','syncut-source.part03')
+          foreach ($part in $parts) {
+            if (-not (Test-Path -LiteralPath $part)) { throw "Missing $part" }
+            $size = (Get-Item -LiteralPath $part).Length
+            if ($size -lt 1000000) { throw "$part is unexpectedly small: $size bytes" }
+            Write-Host "$part = $size bytes"
+          }
+          cmd /c copy /b syncut-source.part01+syncut-source.part02+syncut-source.part03 syncut-source.zip
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath 'syncut-source.zip')) { throw 'Failed to reconstruct syncut-source.zip' }
+          if (-not (Test-Path -LiteralPath 'syncut-source.sha256')) { throw 'syncut-source.sha256 is missing' }
+          $actual = (Get-FileHash -LiteralPath 'syncut-source.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = ((Get-Content -LiteralPath 'syncut-source.sha256' -Raw).Trim().Split()[0]).ToLowerInvariant()
+          Write-Host "Expected SHA256: $expected"
+          Write-Host "Actual SHA256:   $actual"
+          if ($actual -ne $expected) { throw 'Source parts do not belong to the same validated source archive.' }
+
+      - name: Validate and extract fixed source
+        shell: powershell
+        run: |
+          & '.\.github\scripts\v11\validate-source.ps1' -Archive 'syncut-source.zip' -Destination 'source'
+
+      - name: Patch Syncut startup and XMLGUI
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & '.\.github\scripts\v11\fix-syncut-source.ps1' -SourceRoot (Join-Path $env:GITHUB_WORKSPACE 'source\Syncut-Claude-Handoff')
+
+      - name: Setup MSYS2 UCRT64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          release: false
+          path-type: inherit
+          install: >-
+            git
+            make
+            cmake
+            ninja
+            zip
+            base-devel
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-extra-cmake-modules
+            mingw-w64-ucrt-x86_64-kdenlive
+            mingw-w64-ucrt-x86_64-mlt
+            mingw-w64-ucrt-x86_64-ffmpeg
+            mingw-w64-ucrt-x86_64-frei0r-plugins
+            mingw-w64-ucrt-x86_64-fftw
+            mingw-w64-ucrt-x86_64-gdk-pixbuf2
+            mingw-w64-ucrt-x86_64-libebur128
+            mingw-w64-ucrt-x86_64-libsamplerate
+            mingw-w64-ucrt-x86_64-libvorbis
+            mingw-w64-ucrt-x86_64-pango
+            mingw-w64-ucrt-x86_64-qt6-5compat
+            mingw-w64-ucrt-x86_64-qt6-svg
+            mingw-w64-ucrt-x86_64-rtaudio
+            mingw-w64-ucrt-x86_64-rubberband
+            mingw-w64-ucrt-x86_64-rnnoise
+            mingw-w64-ucrt-x86_64-sox
+            mingw-w64-ucrt-x86_64-vid.stab
+            mingw-w64-ucrt-x86_64-kio
+            mingw-w64-ucrt-x86_64-kservice
+            mingw-w64-ucrt-x86_64-qt6-tools
+            mingw-w64-ucrt-x86_64-icoutils
+            mingw-w64-ucrt-x86_64-gdb
+
+      - name: Record exact runtime versions
+        shell: C:/msys64/usr/bin/bash.exe -eo pipefail '{0}'
+        run: |
+          set -euo pipefail
+          {
+            echo "gcc=$(gcc --version | head -1)"
+            echo "cmake=$(cmake --version | head -1)"
+            echo "ninja=$(ninja --version)"
             pacman -Q \
               mingw-w64-ucrt-x86_64-kdenlive \
               mingw-w64-ucrt-x86_64-mlt \
