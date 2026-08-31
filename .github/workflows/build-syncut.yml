@@ -74,6 +74,7 @@ jobs:
         with:
           msystem: UCRT64
           update: true
+          release: false
           path-type: inherit
           install: >-
             git
