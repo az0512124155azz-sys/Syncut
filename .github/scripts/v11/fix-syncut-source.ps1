@@ -166,6 +166,14 @@ $main = $main.Replace(
 )
 Write-Text -Path $mainCpp -Text $main
 
+# Ensure the executable always receives MainWindow definitions, even when the archive also lists mainwindow.cpp.
+$linkMainWindow = Join-Path $SourceRoot 'src\mainwindow_link.cpp'
+Copy-Item -LiteralPath $mainWindow -Destination $linkMainWindow -Force
+$cmakeText = Read-Text $cmakeLists
+if ($cmakeText -notmatch 'target_sources\(kdenlive PRIVATE mainwindow_link\.cpp') {
+    Add-Content -LiteralPath $cmakeLists -Value 'target_sources(kdenlive PRIVATE mainwindow_link.cpp)'
+}
+
 $qrcCheck = Read-Text $uiQrc
 $mwCheck = Read-Text $mainWindow
 if ($qrcCheck -notmatch '(?s)/kxmlgui5/syncut.*syncutui\.rc') {
