@@ -142,6 +142,12 @@ if ($cmakeText -notmatch 'TARGET_FILE:kdenliveLib') {
     Add-Content -LiteralPath $cmakeLists -Value ("`n# Ensure all MainWindow QObject symbols are extracted from the static archive.`n$wholeArchiveOption`n")
     Write-Host 'Enabled whole-archive extraction for kdenliveLib.'
 }
+if ($cmakeText -notmatch '(?m)^qt_add_executable\(kdenlive .*mainwindow\.cpp') {
+    $cmakeText = $cmakeText -replace '(?m)^\s*mainwindow\.cpp\s*\r?\n', ''
+    $cmakeText = $cmakeText.Replace('qt_add_executable(kdenlive MACOSX_BUNDLE main.cpp ${kdenlive_extra_SRCS} ${kdenlive})', 'qt_add_executable(kdenlive MACOSX_BUNDLE main.cpp mainwindow.cpp ${kdenlive_extra_SRCS} ${kdenlive})')
+    Write-Text -Path $cmakeLists -Text $cmakeText
+    Write-Host 'Compiling MainWindow directly into the executable to avoid static-archive extraction issues.'
+}
 
 foreach ($path in @($mainCpp,$coreCpp)) {
     $text = Read-Text $path
