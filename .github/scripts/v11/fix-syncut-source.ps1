@@ -172,7 +172,7 @@ Copy-Item -LiteralPath $mainWindow -Destination $linkMainWindow -Force
 $cmakeText = Read-Text $cmakeLists
 if ($cmakeText -notmatch 'target_sources\(kdenlive PRIVATE mainwindow_link\.cpp') {
     $cmakeSource = $linkMainWindow.Replace('\\','/')
-    Add-Content -LiteralPath $cmakeLists -Value ("target_sources(kdenlive PRIVATE '$cmakeSource')")
+    Add-Content -LiteralPath $cmakeLists -Value ('target_sources(kdenlive PRIVATE ' + $cmakeSource + ')')
 }
 
 $qrcCheck = Read-Text $uiQrc
