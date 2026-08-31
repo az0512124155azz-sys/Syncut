@@ -170,9 +170,13 @@ Write-Text -Path $mainCpp -Text $main
 $linkMainWindow = Join-Path $SourceRoot 'src\mainwindow_link.cpp'
 Copy-Item -LiteralPath $mainWindow -Destination $linkMainWindow -Force
 $cmakeText = Read-Text $cmakeLists
-if ($cmakeText -notmatch 'target_sources\(kdenlive PRIVATE mainwindow_link\.cpp') {
+$alreadyInExecutableSources = $cmakeText -match '(?m)^qt_add_executable\(kdenlive .*mainwindow_link\.cpp'
+$alreadyInTargetSources = $cmakeText -match 'target_sources\(kdenlive PRIVATE[^\)]*mainwindow_link\.cpp'
+if (-not $alreadyInExecutableSources -and -not $alreadyInTargetSources) {
     $cmakeSource = $linkMainWindow -replace '\\','/'
     Add-Content -LiteralPath $cmakeLists -Value ('target_sources(kdenlive PRIVATE ' + $cmakeSource + ')')
+} else {
+    Write-Host 'mainwindow_link.cpp already present in kdenlive target sources; skipping duplicate target_sources() to avoid duplicate MainWindow symbols.'
 }
 
 $qrcCheck = Read-Text $uiQrc
