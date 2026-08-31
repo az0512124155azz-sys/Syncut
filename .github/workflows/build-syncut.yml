@@ -66,8 +66,7 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          & '.\.github\scripts\v11\fix-syncut-source.ps1' `
-            -SourceRoot (Join-Path $env:GITHUB_WORKSPACE 'source\Syncut-Claude-Handoff')
+          & '.\.github\scripts\v11\fix-syncut-source.ps1' -SourceRoot (Join-Path $env:GITHUB_WORKSPACE 'source\Syncut-Claude-Handoff')
 
       - name: Setup MSYS2 UCRT64
         uses: msys2/setup-msys2@v2
