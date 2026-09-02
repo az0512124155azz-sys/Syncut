@@ -39,6 +39,9 @@ $upstreamTemp = Join-Path $env:TEMP 'syncut-upstream-mainwindow.cpp'
 Invoke-WebRequest -Uri $upstreamUrl -OutFile $upstreamTemp
 if (-not (Test-Path -LiteralPath $upstreamTemp) -or (Get-Item -LiteralPath $upstreamTemp).Length -lt 200000) { throw 'Failed to retrieve the complete upstream MainWindow implementation.' }
 Copy-Item -LiteralPath $upstreamTemp -Destination $mainWindow -Force
+$upstreamMainWindow = Read-Text $mainWindow
+$upstreamMainWindow = [regex]::Replace($upstreamMainWindow, '(?s)\s*connect\(bin, &Bin::requestBinCloseForFolder, this, \[this\]\(const QString &folderId\) \{.*?\n\s*\}\);', '')
+Write-Text -Path $mainWindow -Text $upstreamMainWindow
 $requiredMainWindowDefinitions = @(
     'MainWindow::~MainWindow',
     'MainWindow::slotFullScreen',
