@@ -10,6 +10,7 @@ on:
       - '.github/workflows/build-syncut.yml'
       - '.github/scripts/v11/**'
       - 'installer.nsi'
+      - 'main.cpp'
 
 permissions:
   contents: read
