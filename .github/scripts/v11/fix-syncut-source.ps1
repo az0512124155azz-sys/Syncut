@@ -32,6 +32,13 @@ foreach ($required in @($uiQrc,$mainWindow,$mainCpp,$coreCpp)) {
 }
 
 
+
+# The archive handoff omitted part of Kdenlive's canonical MainWindow implementation.
+$upstreamUrl = 'https://raw.githubusercontent.com/KDE/kdenlive/master/src/mainwindow.cpp'
+$upstreamTemp = Join-Path $env:TEMP 'syncut-upstream-mainwindow.cpp'
+Invoke-WebRequest -Uri $upstreamUrl -OutFile $upstreamTemp
+if (-not (Test-Path -LiteralPath $upstreamTemp) -or (Get-Item -LiteralPath $upstreamTemp).Length -lt 200000) { throw 'Failed to retrieve the complete upstream MainWindow implementation.' }
+Copy-Item -LiteralPath $upstreamTemp -Destination $mainWindow -Force
 $requiredMainWindowDefinitions = @(
     'MainWindow::~MainWindow',
     'MainWindow::slotFullScreen',
@@ -94,90 +101,17 @@ if (toolBar()) {
     $mw = $mw.Replace('timelineRender->setToolButtonStyle(toolBar()->toolButtonStyle());', $toolbar.TrimEnd())
 }
 
-$cutMarker = 'QAction *officialCut = actionCollection()->action(KStandardAction::name(KStandardAction::Cut));'
-if ($mw.Contains($cutMarker) -and $mw -notmatch '(?s)QAction\s*\*officialCut.*?if\s*\(\s*officialCut\s*\)') {
-    $start = $mw.IndexOf($cutMarker)
-    $nextMarker = 'connect(m_projectMonitor'
-    $end = $mw.IndexOf($nextMarker, $start)
-    if ($end -gt $start) {
-        $segment = $mw.Substring($start, $end - $start)
-        if ($segment -match 'officialCut->shortcuts\(\)') {
-            $guarded = @"
-QAction *officialCut = actionCollection()->action(KStandardAction::name(KStandardAction::Cut));
-    if (officialCut) {
-        QList<QKeySequence> cutShortcuts = officialCut->shortcuts();
-        if (cutShortcuts.size() > 1 && cutShortcuts.at(1) == QKeySequence(Qt::SHIFT | Qt::Key_Delete)) {
-            cutShortcuts.takeLast();
-            officialCut->setShortcuts(cutShortcuts);
-        }
-    } else {
-        qWarning() << "Syncut XMLGUI did not create the standard Cut action";
-    }
-
-"@
-            $mw = $mw.Substring(0,$start) + $guarded + $mw.Substring($end)
-        }
-    }
-}
+Write-Text -Path $mainWindow -Text $mw
+$mw = Read-Text $mainWindow
 Write-Text -Path $mainWindow -Text $mw
 
-# Keep the canonical implementation at its original CMake path. Renaming the
-# translation unit prevents Qt automoc from associating mainwindow.cpp with
-# mainwindow.h and produces unresolved MainWindow meta-object symbols at link.
+# Keep the canonical implementation at its original CMake path so Qt automoc and the static-library link see the same MainWindow object.
 $cmakeLists = Join-Path $SourceRoot 'src\CMakeLists.txt'
-if (-not (Test-Path -LiteralPath $cmakeLists)) {
-    throw "Required CMake file is missing: $cmakeLists"
-}
+if (-not (Test-Path -LiteralPath $cmakeLists)) { throw "Required CMake file is missing: $cmakeLists" }
 $cmakeText = Read-Text $cmakeLists
-if ($cmakeText -match '(?m)^\s*mainwindow_complete\.cpp\s*$') {
-    $cmakeText = $cmakeText -replace '(?m)^\s*mainwindow_complete\.cpp\s*$', '    mainwindow.cpp'
-    Write-Text -Path $cmakeLists -Text $cmakeText
-    Write-Host 'Normalized CMakeLists.txt back to mainwindow.cpp.'
-} elseif ($cmakeText -notmatch '(?m)^\s*mainwindow\.cpp\s*$') {
-    throw 'CMakeLists.txt must compile mainwindow.cpp.'
-}
-Write-Host 'Keeping canonical mainwindow.cpp enabled for Qt automoc and linking.'
-$wholeArchiveOption = 'target_link_options(kdenlive PRIVATE "-Wl,--whole-archive" "$<TARGET_FILE:kdenliveLib>" "-Wl,--no-whole-archive")'
-if ($cmakeText -notmatch 'TARGET_FILE:kdenliveLib') {
-    Add-Content -LiteralPath $cmakeLists -Value ("`n# Ensure all MainWindow QObject symbols are extracted from the static archive.`n$wholeArchiveOption`n")
-    Write-Host 'Enabled whole-archive extraction for kdenliveLib.'
-}
-if ($cmakeText -notmatch '(?m)^qt_add_executable\(kdenlive .*mainwindow_link\.cpp') {
-    $linkMainWindow = Join-Path $SourceRoot 'src\mainwindow_link.cpp'
-    Copy-Item -LiteralPath $mainWindow -Destination $linkMainWindow -Force
-    $cmakeText = $cmakeText -replace '(?m)^\s*mainwindow\.cpp\s*\r?\n', ''
-    $cmakeText = $cmakeText.Replace('qt_add_executable(kdenlive MACOSX_BUNDLE main.cpp mainwindow.cpp ${kdenlive_extra_SRCS} ${kdenlive})', 'qt_add_executable(kdenlive MACOSX_BUNDLE main.cpp mainwindow_link.cpp ${kdenlive_extra_SRCS} ${kdenlive})')
-    $cmakeText = $cmakeText.Replace('qt_add_executable(kdenlive MACOSX_BUNDLE main.cpp ${kdenlive_extra_SRCS} ${kdenlive})', 'qt_add_executable(kdenlive MACOSX_BUNDLE main.cpp mainwindow_link.cpp ${kdenlive_extra_SRCS} ${kdenlive})')
-    Write-Text -Path $cmakeLists -Text $cmakeText
-    Write-Host 'Compiling MainWindow directly into the executable to avoid static-archive extraction issues.'
-}
-
-foreach ($path in @($mainCpp,$coreCpp)) {
-    $text = Read-Text $path
-    $text = $text.Replace(':/kxmlgui5/kdenlive/kdenliveui.rc', ':/kxmlgui5/syncut/syncutui.rc')
-    $text = $text.Replace('kxmlgui5/kdenlive/kdenliveui.rc', 'kxmlgui5/syncut/syncutui.rc')
-    Write-Text -Path $path -Text $text
-}
-
-$main = Read-Text $mainCpp
-$main = $main.Replace(
-    'if (config->name().contains(QLatin1String("kdenlive"))) {',
-    'if (config->name().contains(QLatin1String("syncut")) || config->name().contains(QLatin1String("kdenlive"))) {'
-)
-Write-Text -Path $mainCpp -Text $main
-
-# Ensure the executable always receives MainWindow definitions, even when the archive also lists mainwindow.cpp.
-$linkMainWindow = Join-Path $SourceRoot 'src\mainwindow_link.cpp'
-Copy-Item -LiteralPath $mainWindow -Destination $linkMainWindow -Force
-$cmakeText = Read-Text $cmakeLists
-$alreadyInExecutableSources = $cmakeText -match '(?m)^qt_add_executable\(kdenlive .*mainwindow_link\.cpp'
-$alreadyInTargetSources = $cmakeText -match 'target_sources\(kdenlive PRIVATE[^\)]*mainwindow_link\.cpp'
-if (-not $alreadyInExecutableSources -and -not $alreadyInTargetSources) {
-    $cmakeSource = $linkMainWindow -replace '\\','/'
-    Add-Content -LiteralPath $cmakeLists -Value ('target_sources(kdenlive PRIVATE ' + $cmakeSource + ')')
-} else {
-    Write-Host 'mainwindow_link.cpp already present in kdenlive target sources; skipping duplicate target_sources() to avoid duplicate MainWindow symbols.'
-}
+if ($cmakeText -match '(?m)^\s*mainwindow_complete\.cpp\s*$') { $cmakeText = $cmakeText -replace '(?m)^\s*mainwindow_complete\.cpp\s*$', '    mainwindow.cpp'; Write-Text -Path $cmakeLists -Text $cmakeText }
+if ($cmakeText -notmatch '(?m)^\s*mainwindow\.cpp\s*$') { throw 'CMakeLists.txt must compile mainwindow.cpp.' }
+Write-Host 'Canonical complete MainWindow source is enabled in kdenliveLib.'
 
 $qrcCheck = Read-Text $uiQrc
 $mwCheck = Read-Text $mainWindow
