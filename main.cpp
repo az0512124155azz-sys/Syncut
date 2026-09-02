@@ -283,6 +283,15 @@ int main(int argc, char *argv[])
         QScrollBar:vertical, QScrollBar:horizontal { background: #11161b; border: 0; }
         QScrollBar::handle { background: #3a4652; border-radius: 3px; min-height: 24px; min-width: 24px; }
         QStatusBar { background: #11161b; color: #9ba8b5; border-top: 1px solid #28313a; }
+        QLabel, QCheckBox, QRadioButton, QGroupBox, QAbstractButton { color: #e8edf3; }
+        QCheckBox:disabled, QRadioButton:disabled, QLabel:disabled, QGroupBox:disabled { color: #84909c; }
+        QAbstractItemView, QListView, QTreeView, QTableView { background: #11161b; color: #e8edf3; alternate-background-color: #171c22; selection-background-color: #245f86; selection-color: #ffffff; }
+        QHeaderView::section { background: #202832; color: #edf3f8; border: 1px solid #35404b; padding: 4px; }
+        QComboBox QAbstractItemView { background: #171c22; color: #edf3f8; selection-background-color: #245f86; selection-color: #ffffff; }
+        QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QPushButton:disabled { background: #1a2027; color: #84909c; border-color: #2a313a; }
+        QToolButton:disabled { color: #84909c; }
+        QDockWidget, QDockWidget::title { background: #171c22; color: #e8edf3; }
+        QSplitter::handle { background: #303943; }
         QLabel#syncutAiStatus { color: #74c7ff; }
     )SYNCUTQSS"));
 
