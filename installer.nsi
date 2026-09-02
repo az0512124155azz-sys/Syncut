@@ -5,7 +5,6 @@ InstallDir "$LOCALAPPDATA\Programs\Syncut"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 SetOverwrite on
-SetShellVarContext current
 
 !if /FileExists "dist\Syncut\syncut.ico"
   Icon "dist\Syncut\syncut.ico"
@@ -31,6 +30,7 @@ UninstPage instfiles
 !macroend
 
 Section "Syncut" SecMain
+  SetShellVarContext current
   !insertmacro StopSyncutProcesses
   RMDir /r "$INSTDIR"
   Sleep 300
@@ -60,6 +60,7 @@ Section "Syncut" SecMain
 SectionEnd
 
 Section "Uninstall"
+  SetShellVarContext current
   !insertmacro StopSyncutProcesses
   Delete "$DESKTOP\Syncut.lnk"
   Delete "$SMPROGRAMS\Syncut\Syncut.lnk"
