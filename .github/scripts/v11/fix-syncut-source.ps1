@@ -24,6 +24,8 @@ $uiQrc = Join-Path $SourceRoot 'src\uiresources.qrc'
 $mainWindow = Join-Path $SourceRoot 'src\mainwindow.cpp'
 $mainCpp = Join-Path $SourceRoot 'src\main.cpp'
 $coreCpp = Join-Path $SourceRoot 'src\core.cpp'
+$repoRoot = Split-Path -Parent (Split-Path -Parent $SourceRoot)
+$visualSource = Join-Path $repoRoot 'main.cpp'
 
 foreach ($required in @($uiQrc,$mainWindow,$mainCpp,$coreCpp,$visualSource)) {
     if (-not (Test-Path -LiteralPath $required)) {
