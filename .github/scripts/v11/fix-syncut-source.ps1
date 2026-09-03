@@ -25,7 +25,7 @@ $mainWindow = Join-Path $SourceRoot 'src\mainwindow.cpp'
 $mainCpp = Join-Path $SourceRoot 'src\main.cpp'
 $coreCpp = Join-Path $SourceRoot 'src\core.cpp'
 
-foreach ($required in @($uiQrc,$mainWindow,$mainCpp,$coreCpp)) {
+foreach ($required in @($uiQrc,$mainWindow,$mainCpp,$coreCpp,$visualSource)) {
     if (-not (Test-Path -LiteralPath $required)) {
         throw "Required source file is missing: $required"
     }
@@ -65,6 +65,28 @@ if ($stillMissing.Count -gt 0) {
 # truncated handoff artifact and replacing this file with it causes linker
 # failures for the MainWindow methods above.
 Write-Host 'Using archive src/mainwindow.cpp; skipped truncated repository-root copy.'
+
+
+
+# Apply Syncut's visual language to the canonical archive main.cpp.
+$visualText = Read-Text $visualSource
+$styleMatch = [regex]::Match($visualText, '(?s)    // Syncut visual language:.*?SYNCUTQSS"\)\);')
+if (-not $styleMatch.Success) {
+    throw 'Syncut visual language block is missing from repository-root main.cpp.'
+}
+$styleBlock = $styleMatch.Value
+$archiveMainText = Read-Text $mainCpp
+if ($archiveMainText -notmatch 'Syncut visual language:') {
+    $styleMarker = '    // Try to detect package type'
+    if ($archiveMainText -notmatch [regex]::Escape($styleMarker)) {
+        throw 'Could not find main.cpp style insertion point.'
+    }
+    $archiveMainText = $archiveMainText.Replace($styleMarker, $styleBlock + [Environment]::NewLine + [Environment]::NewLine + $styleMarker)
+    Write-Text -Path $mainCpp -Text $archiveMainText
+    Write-Host 'Applied Syncut visual language to archive src/main.cpp.'
+} else {
+    Write-Host 'Syncut visual language already present in archive src/main.cpp.'
+}
 
 $qrc = Read-Text $uiQrc
 if ($qrc -notmatch '(?s)<qresource\s+prefix=["'']/kxmlgui5/syncut["'']>.*?syncutui\.rc.*?</qresource>') {
